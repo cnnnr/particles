@@ -61,11 +61,25 @@ class ParticleRenderer
 	private static final int LIGHT_AMBIENT = 90;
 	private static final int LIGHT_CONTRAST = 2000;
 	/**
-	 * Cap on faces per batch model; a tile gets multiple batch objects if its
-	 * particles exceed this.
+	 * Caps per batch model, from the GPU plugin's FacePrioritySorter budgets
+	 * (6500 vertices, 4000 faces per priority - our faces share one priority).
+	 * A tile gets multiple batch objects if its particles exceed a canvas.
 	 */
-	private static final int MAX_FACES_PER_BATCH = 8000;
+	private static final int MAX_FACES_PER_BATCH = 3500;
+	private static final int MAX_VERTICES_PER_BATCH = 6000;
 	private static final byte INVISIBLE = (byte) 254;
+
+	/**
+	 * Fixed volume around the tile center that canvas geometry must stay
+	 * inside. Model bounds are computed ONCE over this volume at build time
+	 * (the engine caches bounds; recomputing on mutated models is a no-op),
+	 * so runtime writes are clamped into it - otherwise the GPU plugin's
+	 * depth sort asserts on vertices outside the frozen radius.
+	 */
+	private static final float VOLUME_HORIZONTAL = 256f;
+	private static final float VOLUME_UP = -1200f;
+	private static final float VOLUME_DOWN = 200f;
+	private static final float CLAMP_MARGIN = 56f;
 
 	/**
 	 * A pre-merged, pre-lit batch model whose arrays are rewritten in place.
@@ -109,6 +123,15 @@ class ParticleRenderer
 			slotStyle = new ParticleStyle[slotsPerCanvas];
 			slotVariant = new int[slotsPerCanvas];
 			Arrays.fill(slotVariant, -1);
+
+			// Lock in bounds NOW, while the geometry spans the whole clamp
+			// volume: the engine computes bounds once and caches, so this is
+			// the only computation the model ever gets
+			lit.calculateBoundsCylinder();
+			for (int slot = 0; slot < slotsPerCanvas; slot++)
+			{
+				clearSlot(this, slot);
+			}
 
 			object = client.createRuneLiteObject();
 			object.setDrawFrontTilesFirst(true);
@@ -184,7 +207,9 @@ class ParticleRenderer
 			}
 			templateVertexCount = sourceMesh.getVerticesCount();
 			templateFaceCount = sourceMesh.getFaceCount();
-			slotsPerCanvas = Math.max(1, MAX_FACES_PER_BATCH / Math.max(1, templateFaceCount));
+			slotsPerCanvas = Math.max(1, Math.min(
+				MAX_FACES_PER_BATCH / Math.max(1, templateFaceCount),
+				MAX_VERTICES_PER_BATCH / Math.max(1, templateVertexCount)));
 			buildCanvasProto();
 		}
 
@@ -408,7 +433,6 @@ class ParticleRenderer
 			}
 			canvas.highWater = canvas.usedSlots;
 
-			canvas.lit.calculateBoundsCylinder();
 			canvas.object.setLocation(canvas.centerLp, level);
 			if (!canvas.object.isActive())
 			{
@@ -462,9 +486,14 @@ class ParticleRenderer
 		ModelData[] parts = new ModelData[slotsPerCanvas];
 		for (int i = 0; i < slotsPerCanvas; i++)
 		{
-			// Distinct whole-unit offsets; epsilons are sub-unit, so no vertex
-			// position can coincide across slots and welding can't occur
-			parts[i] = canvasProto.shallowCopy().cloneVertices().translate(i * 1024, 0, 0);
+			// Distinct whole-unit offsets spread through the bounds volume, so
+			// welding can't fuse slots (epsilons are sub-unit) AND the bounds
+			// computed from the build-time geometry cover everything runtime
+			// writes are clamped to
+			int x = -(int) VOLUME_HORIZONTAL + (i % 9) * 64;
+			int y = (int) VOLUME_DOWN - ((i / 9) % 24) * 60;
+			int z = -(int) VOLUME_HORIZONTAL + ((i / 216) % 9) * 64;
+			parts[i] = canvasProto.shallowCopy().cloneVertices().translate(x, y, z);
 		}
 		ModelData merged = client.mergeModels(parts).cloneTransparencies(true);
 
@@ -493,9 +522,14 @@ class ParticleRenderer
 		int fade = fadeStep(p.lifeFraction());
 
 		int vertexBase = slot * templateVertexCount;
-		float dx = p.getX() - canvas.centerLp.getX();
-		float dy = p.getZ() - canvas.centerHeight;
-		float dz = p.getY() - canvas.centerLp.getY();
+		// Clamp into the bounds volume the canvas was built over; vertices
+		// outside the once-computed model radius break the GPU depth sort
+		float dx = clamp(p.getX() - canvas.centerLp.getX(),
+			-VOLUME_HORIZONTAL + CLAMP_MARGIN, VOLUME_HORIZONTAL - CLAMP_MARGIN);
+		float dy = clamp(p.getZ() - canvas.centerHeight,
+			VOLUME_UP + CLAMP_MARGIN, VOLUME_DOWN - CLAMP_MARGIN);
+		float dz = clamp(p.getY() - canvas.centerLp.getY(),
+			-VOLUME_HORIZONTAL + CLAMP_MARGIN, VOLUME_HORIZONTAL - CLAMP_MARGIN);
 
 		ModelData sizeTemplate = style.getTemplates()[size][0];
 		float[] sx = sizeTemplate.getVerticesX();
@@ -534,6 +568,11 @@ class ParticleRenderer
 			System.arraycopy(style.getLitColors2(), 0, canvas.colors2, faceBase, templateFaceCount);
 			System.arraycopy(style.getLitColors3(), 0, canvas.colors3, faceBase, templateFaceCount);
 		}
+	}
+
+	private static float clamp(float v, float min, float max)
+	{
+		return v < min ? min : Math.min(v, max);
 	}
 
 	private void clearSlot(BatchCanvas canvas, int slot)
