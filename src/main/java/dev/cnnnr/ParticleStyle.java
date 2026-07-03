@@ -24,6 +24,13 @@ class ParticleStyle
 	 * centered on the origin.
 	 */
 	private final ModelData[][] templates;
+	/**
+	 * Pre-lit per-face colors, copied into batch canvases in place of
+	 * per-tick relighting.
+	 */
+	private final int[] litColors1;
+	private final int[] litColors2;
+	private final int[] litColors3;
 	private final float lifetimeSec;
 	private final float particlesPerSecond;
 	/**
@@ -45,9 +52,13 @@ class ParticleStyle
 	private final int animFrameStart;
 	private final int animFrameEnd;
 
-	ParticleStyle(ModelData[][] templates, EmitterProfile profile)
+	ParticleStyle(ModelData[][] templates, int[] litColors1, int[] litColors2, int[] litColors3,
+		EmitterProfile profile)
 	{
 		this.templates = templates;
+		this.litColors1 = litColors1;
+		this.litColors2 = litColors2;
+		this.litColors3 = litColors3;
 		this.lifetimeSec = profile.getLifetimeMs() / 1000f;
 		this.particlesPerSecond = profile.getParticlesPerSecond();
 		this.trailDensity = profile.getTrailDensity();

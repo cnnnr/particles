@@ -8,6 +8,9 @@ import lombok.Getter;
  * height at spawn so particles stay glued to the model on uneven ground.
  * Purely simulation state; rendering is done by {@link ParticleRenderer}
  * batching live particles into per-tile models.
+ *
+ * Instances are pooled by {@link ParticleSystem} and reinitialized via
+ * {@link #reset}, so fields are mutable by design.
  */
 class Particle
 {
@@ -18,29 +21,29 @@ class Particle
 	@Getter
 	private float z;
 
-	private final float velX;
-	private final float velY;
-	private final float velZ;
-	private final float lifetime;
+	private float velX;
+	private float velY;
+	private float velZ;
+	private float lifetime;
 	// Sinusoidal drift so motion meanders instead of travelling straight
-	private final float wobblePhase;
-	private final float wobbleFreq;
-	private final float wobbleAmp;
+	private float wobblePhase;
+	private float wobbleFreq;
+	private float wobbleAmp;
 	private float age;
 
 	/**
 	 * The style this particle renders with.
 	 */
 	@Getter
-	private final ParticleStyle style;
+	private ParticleStyle style;
 
 	/**
 	 * Which pre-baked size variant of the style this particle renders with.
 	 */
 	@Getter
-	private final int sizeVariant;
+	private int sizeVariant;
 
-	Particle(float x, float y, float z, float velX, float velY, float velZ,
+	void reset(float x, float y, float z, float velX, float velY, float velZ,
 		float lifetime, ParticleStyle style, int sizeVariant,
 		float wobblePhase, float wobbleFreq, float wobbleAmp)
 	{
@@ -56,6 +59,7 @@ class Particle
 		this.wobblePhase = wobblePhase;
 		this.wobbleFreq = wobbleFreq;
 		this.wobbleAmp = wobbleAmp;
+		this.age = 0;
 	}
 
 	void update(float dt)

@@ -7,6 +7,7 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -151,9 +152,15 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	// Emitter resolution cache: rebuilt only when gear or profiles change.
 	// Client thread.
 	private final List<ActiveEmitter> activeEmitters = new ArrayList<>();
-	private String resolvedCompositionKey;
+	private int[] resolvedEquipmentIds;
 	private int resolvedRevision = -1;
 	private int stylesRevision = -1;
+
+	// Reused consumers; a method reference expression allocates per evaluation
+	private final java.util.function.Consumer<Particle> deathStats = this::onParticleDeath;
+	private static final java.util.function.Consumer<Particle> DISCARD = p ->
+	{
+	};
 
 	private long lastNanos;
 	private int lastLevel = -1;
@@ -175,7 +182,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	protected void startUp() throws Exception
 	{
 		lastNanos = System.nanoTime();
-		resolvedCompositionKey = null;
+		resolvedEquipmentIds = null;
 		resolvedRevision = -1;
 		stylesRevision = -1;
 		renderer = new ParticleRenderer(client);
@@ -219,9 +226,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 		clientThread.invokeLater(() ->
 		{
-			particleSystem.clear(p ->
-			{
-			});
+			particleSystem.clear(DISCARD);
 			renderer.reset();
 			anchorCount = 0;
 		});
@@ -237,16 +242,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			case LOADING:
 				// The scene is rebasing; live particles' local coordinates
 				// become meaningless
-				particleSystem.clear(p ->
-				{
-				});
+				particleSystem.clear(DISCARD);
 				renderer.reset();
 				break;
 			case LOGGED_IN:
 				// The player model is rebuilt on scene load and its vertex
 				// indices can change; re-resolve emitters against the new
 				// model or emission goes subtly wrong until gear is re-equipped
-				resolvedCompositionKey = null;
+				resolvedEquipmentIds = null;
 				break;
 			default:
 				break;
@@ -267,16 +270,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (stylesRevision != store.getRevision() && renderer.rebuildStyles(store.snapshotAll()))
 		{
 			stylesRevision = store.getRevision();
-			resolvedCompositionKey = null;
+			resolvedEquipmentIds = null;
 		}
 
 		Player player = client.getLocalPlayer();
 		if (player == null)
 		{
 			anchorCount = 0;
-			particleSystem.clear(p ->
-			{
-			});
+			particleSystem.clear(DISCARD);
 			renderer.reset();
 			lastLevel = -1;
 			return;
@@ -287,9 +288,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		int level = player.getWorldView().getPlane();
 		if (level != lastLevel)
 		{
-			particleSystem.clear(p ->
-			{
-			});
+			particleSystem.clear(DISCARD);
 			lastLevel = level;
 		}
 		anchorWorldView = player.getLocalLocation().getWorldView();
@@ -297,7 +296,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 		updateAnchors(player);
 		emit(dt, player);
-		particleSystem.update(dt, this::onParticleDeath);
+		particleSystem.update(dt, deathStats);
 		renderer.sync(particleSystem.getParticles(), anchorWorldView, anchorLevel);
 		updateStats(now);
 	}
@@ -429,7 +428,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (anchorsRebuilt || prevAnchorCount != anchorCount)
 		{
 			prevAnchorCount = 0;
-			java.util.Arrays.fill(trailCarry, 0, trailCarry.length, 0f);
+			Arrays.fill(trailCarry, 0, trailCarry.length, 0f);
 		}
 		anchorsRebuilt = false;
 	}
@@ -469,17 +468,18 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (composition == null)
 		{
 			activeEmitters.clear();
-			resolvedCompositionKey = null;
+			resolvedEquipmentIds = null;
 			return;
 		}
 
-		String key = compositionKey(composition);
+		// Compare gear directly; building a key string every tick is garbage
+		int[] equipmentIds = composition.getEquipmentIds();
 		int revision = store.getRevision();
-		if (key.equals(resolvedCompositionKey) && revision == resolvedRevision)
+		if (Arrays.equals(equipmentIds, resolvedEquipmentIds) && revision == resolvedRevision)
 		{
 			return;
 		}
-		resolvedCompositionKey = key;
+		resolvedEquipmentIds = equipmentIds.clone();
 		resolvedRevision = revision;
 		anchorsRebuilt = true;
 
@@ -551,16 +551,6 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 		}
 		return ids;
-	}
-
-	private static String compositionKey(PlayerComposition composition)
-	{
-		StringBuilder sb = new StringBuilder();
-		for (int id : composition.getEquipmentIds())
-		{
-			sb.append(id).append(',');
-		}
-		return sb.toString();
 	}
 
 	private void emit(float dt, Player player)

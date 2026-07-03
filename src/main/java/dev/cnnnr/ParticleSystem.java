@@ -1,14 +1,18 @@
 package dev.cnnnr;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Iterator;
+import java.util.Deque;
 import java.util.List;
 import java.util.function.Consumer;
 import javax.annotation.Nullable;
 import lombok.Getter;
 
 /**
- * Holds and integrates live particles. All access is on the client thread.
+ * Holds and integrates live particles. Dead particles are recycled through a
+ * pool, and removal is swap-with-last, so steady-state updates allocate
+ * nothing. Particle order is not meaningful. All access is on the client
+ * thread.
  */
 class ParticleSystem
 {
@@ -17,6 +21,7 @@ class ParticleSystem
 
 	@Getter
 	private final List<Particle> particles = new ArrayList<>();
+	private final Deque<Particle> pool = new ArrayDeque<>();
 
 	@Nullable
 	Particle spawn(float x, float y, float z, float velX, float velY, float velZ,
@@ -27,7 +32,12 @@ class ParticleSystem
 		{
 			return null;
 		}
-		Particle p = new Particle(x, y, z, velX, velY, velZ,
+		Particle p = pool.pollFirst();
+		if (p == null)
+		{
+			p = new Particle();
+		}
+		p.reset(x, y, z, velX, velY, velZ,
 			lifetime, style, sizeVariant, wobblePhase, wobbleFreq, wobbleAmp);
 		particles.add(p);
 		return p;
@@ -35,21 +45,28 @@ class ParticleSystem
 
 	void update(float dt, Consumer<Particle> onDeath)
 	{
-		for (Iterator<Particle> it = particles.iterator(); it.hasNext(); )
+		for (int i = particles.size() - 1; i >= 0; i--)
 		{
-			Particle p = it.next();
+			Particle p = particles.get(i);
 			p.update(dt);
 			if (p.isDead())
 			{
 				onDeath.accept(p);
-				it.remove();
+				int last = particles.size() - 1;
+				particles.set(i, particles.get(last));
+				particles.remove(last);
+				pool.addFirst(p);
 			}
 		}
 	}
 
 	void clear(Consumer<Particle> onDeath)
 	{
-		particles.forEach(onDeath);
+		for (Particle p : particles)
+		{
+			onDeath.accept(p);
+			pool.addFirst(p);
+		}
 		particles.clear();
 	}
 }
