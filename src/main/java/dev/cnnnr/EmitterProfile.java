@@ -28,6 +28,18 @@ class EmitterProfile
 	 * variants that share the same model.
 	 */
 	private Set<Integer> itemIds = new HashSet<>();
+	/**
+	 * Animation IDs gating this profile: only emit while the player's action
+	 * or pose animation is one of these. Empty = no animation gate. Combines
+	 * with the item gate (both must pass).
+	 */
+	private Set<Integer> animationIds = new HashSet<>();
+	/**
+	 * Optional frame window within a matched action animation; -1 = unbounded.
+	 * Ignored for pose animation matches.
+	 */
+	private int animFrameStart = -1;
+	private int animFrameEnd = -1;
 
 	// Particle style, editable per piece in the vertex picker
 	/**
@@ -96,5 +108,8 @@ class EmitterProfile
 		offsetY = other.offsetY;
 		offsetZ = other.offsetZ;
 		itemIds = new HashSet<>(other.itemIds);
+		animationIds = new HashSet<>(other.animationIds);
+		animFrameStart = other.animFrameStart;
+		animFrameEnd = other.animFrameEnd;
 	}
 }

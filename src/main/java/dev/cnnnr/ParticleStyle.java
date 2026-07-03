@@ -1,5 +1,6 @@
 package dev.cnnnr;
 
+import java.util.Set;
 import lombok.Getter;
 import net.runelite.api.ModelData;
 
@@ -36,6 +37,9 @@ class ParticleStyle
 	private final float offsetX;
 	private final float offsetY;
 	private final float offsetZ;
+	private final Set<Integer> animationIds;
+	private final int animFrameStart;
+	private final int animFrameEnd;
 
 	ParticleStyle(ModelData[][] templates, EmitterProfile profile)
 	{
@@ -48,5 +52,27 @@ class ParticleStyle
 		this.offsetX = profile.getOffsetX();
 		this.offsetY = profile.getOffsetY();
 		this.offsetZ = profile.getOffsetZ();
+		this.animationIds = Set.copyOf(profile.getAnimationIds());
+		this.animFrameStart = profile.getAnimFrameStart();
+		this.animFrameEnd = profile.getAnimFrameEnd();
+	}
+
+	/**
+	 * Animation gate: emit only while the player's action or pose animation
+	 * matches, with an optional frame window on action matches. An empty gate
+	 * always passes; live particles are unaffected and fade out naturally.
+	 */
+	boolean animationMatches(int actionAnimation, int actionFrame, int poseAnimation)
+	{
+		if (animationIds.isEmpty())
+		{
+			return true;
+		}
+		if (animationIds.contains(actionAnimation))
+		{
+			return (animFrameStart < 0 || actionFrame >= animFrameStart)
+				&& (animFrameEnd < 0 || actionFrame <= animFrameEnd);
+		}
+		return animationIds.contains(poseAnimation);
 	}
 }

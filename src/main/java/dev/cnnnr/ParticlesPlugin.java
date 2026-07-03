@@ -146,6 +146,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	private int windowSpawns;
 	private int windowDeaths;
 	private float windowDeathAgeSum;
+	/**
+	 * Most recent non-idle action animation, sticky so short animations can be
+	 * read off the stats line for authoring animation gates.
+	 */
+	private int lastActionAnimation = -1;
 	@Getter
 	private String statsLine = "";
 
@@ -274,7 +279,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		anchorLevel = level;
 
 		updateAnchors(player);
-		emit(dt);
+		emit(dt, player);
 		particleSystem.update(dt, this::onParticleDeath);
 		renderer.sync(particleSystem.getParticles(), anchorWorldView, anchorLevel);
 		updateStats(now);
@@ -303,6 +308,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			+ " | deaths/s " + windowDeaths
 			+ " | avg death age " + (avgDeathAgePct < 0 ? "-" : avgDeathAgePct + "%")
 			+ " | oob kills " + renderer.drainOutOfSceneKills()
+			+ " | last anim " + lastActionAnimation
 			+ " | " + renderer.getCameraDebug();
 		windowSpawns = 0;
 		windowDeaths = 0;
@@ -489,7 +495,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		return sb.toString();
 	}
 
-	private void emit(float dt)
+	private void emit(float dt, Player player)
 	{
 		if (anchorCount == 0)
 		{
@@ -500,6 +506,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			return;
 		}
 
+		// Animation gate inputs, shared by all emitters this tick
+		int actionAnimation = player.getAnimation();
+		int actionFrame = player.getAnimationFrame();
+		int poseAnimation = player.getPoseAnimation();
+		lastActionAnimation = actionAnimation != -1 ? actionAnimation : lastActionAnimation;
+
 		int budget = config.maxParticles();
 		for (ActiveEmitter emitter : activeEmitters)
 		{
@@ -509,6 +521,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				continue;
 			}
 			ParticleStyle style = emitter.style;
+			if (!style.animationMatches(actionAnimation, actionFrame, poseAnimation))
+			{
+				// Reset so the gate opening doesn't release a burst
+				emitter.carry = 0;
+				continue;
+			}
 
 			// Throttle to what the budget can sustain: outrunning it makes
 			// births and deaths synchronize into visible waves
