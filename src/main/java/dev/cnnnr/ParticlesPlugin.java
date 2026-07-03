@@ -119,6 +119,23 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	@Getter
 	private int anchorLevel;
 
+	// Last tick's anchor positions: spawns are spread along each anchor's
+	// movement segment so fast-moving emitters (weapon swings) lay a smooth
+	// trail instead of one clump per tick
+	private float[] prevAnchorXs = new float[0];
+	private float[] prevAnchorYs = new float[0];
+	private float[] prevAnchorZs = new float[0];
+	private int prevAnchorCount;
+	private boolean anchorsRebuilt;
+	/**
+	 * Fractional carry of distance-based emission per anchor slot.
+	 */
+	private float[] trailCarry = new float[0];
+	/**
+	 * Segments longer than this are teleports/rebinds, not movement.
+	 */
+	private static final float MAX_TRAIL_SEGMENT = 256f;
+
 	/**
 	 * The last snapshot loaded into the viewer; vertex toggles resolve their
 	 * piece against it. EDT only.
@@ -321,6 +338,20 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private void updateAnchors(Player player)
 	{
+		// Keep last tick's anchors for movement-segment interpolation
+		prevAnchorCount = anchorCount;
+		if (anchorCount > 0)
+		{
+			if (prevAnchorXs.length < anchorXs.length)
+			{
+				prevAnchorXs = new float[anchorXs.length];
+				prevAnchorYs = new float[anchorXs.length];
+				prevAnchorZs = new float[anchorXs.length];
+			}
+			System.arraycopy(anchorXs, 0, prevAnchorXs, 0, anchorCount);
+			System.arraycopy(anchorYs, 0, prevAnchorYs, 0, anchorCount);
+			System.arraycopy(anchorZs, 0, prevAnchorZs, 0, anchorCount);
+		}
 		anchorCount = 0;
 
 		Model model = player.getModel();
@@ -389,6 +420,42 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				emitter.anchorCount++;
 			}
 		}
+
+		if (trailCarry.length < anchorXs.length)
+		{
+			trailCarry = new float[anchorXs.length];
+		}
+		// Anchor slots only correspond across ticks while the layout is stable
+		if (anchorsRebuilt || prevAnchorCount != anchorCount)
+		{
+			prevAnchorCount = 0;
+			java.util.Arrays.fill(trailCarry, 0, trailCarry.length, 0f);
+		}
+		anchorsRebuilt = false;
+	}
+
+	/**
+	 * @return whether an anchor's movement since last tick is usable as an
+	 * emission segment (layout stable and not a teleport-sized jump)
+	 */
+	private boolean segmentUsable(int a)
+	{
+		if (prevAnchorCount != anchorCount)
+		{
+			return false;
+		}
+		float dx = anchorXs[a] - prevAnchorXs[a];
+		float dy = anchorYs[a] - prevAnchorYs[a];
+		float dz = anchorZs[a] - prevAnchorZs[a];
+		return dx * dx + dy * dy + dz * dz <= MAX_TRAIL_SEGMENT * MAX_TRAIL_SEGMENT;
+	}
+
+	private float segmentLength(int a)
+	{
+		float dx = anchorXs[a] - prevAnchorXs[a];
+		float dy = anchorYs[a] - prevAnchorYs[a];
+		float dz = anchorZs[a] - prevAnchorZs[a];
+		return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
 	}
 
 	/**
@@ -414,6 +481,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		}
 		resolvedCompositionKey = key;
 		resolvedRevision = revision;
+		anchorsRebuilt = true;
 
 		Set<Integer> wornItemIds = wornItemIds(composition);
 		Map<String, EmitterProfile> profiles = store.snapshotAll();
@@ -528,8 +596,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				continue;
 			}
 
-			// Throttle to what the budget can sustain: outrunning it makes
-			// births and deaths synchronize into visible waves
+			// Time-based emission, throttled to what the budget can sustain:
+			// outrunning it makes births and deaths synchronize into waves
 			float sustainable = budget / style.getLifetimeSec() * 0.95f;
 			float rate = Math.min(style.getParticlesPerSecond(), sustainable);
 			emitter.carry += rate * dt;
@@ -542,23 +610,65 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				{
 					return;
 				}
-				spawnParticle(emitter);
+				int a = emitter.anchorStart + random.nextInt(emitter.anchorCount);
+				spawnParticle(emitter, a, random.nextFloat());
+			}
+
+			// Distance-based emission: spread spawns evenly along each
+			// anchor's movement this tick, for ribbon-like weapon trails
+			float density = style.getTrailDensity();
+			if (density <= 0)
+			{
+				continue;
+			}
+			for (int a = emitter.anchorStart; a < emitter.anchorStart + emitter.anchorCount; a++)
+			{
+				if (!segmentUsable(a))
+				{
+					trailCarry[a] = 0;
+					continue;
+				}
+				float owed = trailCarry[a] + segmentLength(a) / 128f * density;
+				int n = (int) owed;
+				trailCarry[a] = owed - n;
+				for (int i = 0; i < n; i++)
+				{
+					if (particleSystem.getParticles().size() >= budget)
+					{
+						return;
+					}
+					// Stratified positions along the segment: an even ribbon
+					spawnParticle(emitter, a, (i + random.nextFloat()) / n);
+				}
 			}
 		}
 	}
 
-	private void spawnParticle(ActiveEmitter emitter)
+	/**
+	 * Spawn one particle at fraction t along the anchor's movement segment
+	 * since last tick (falling back to its current position), plus jitter.
+	 */
+	private void spawnParticle(ActiveEmitter emitter, int a, float t)
 	{
 		ParticleStyle style = emitter.style;
-		int a = emitter.anchorStart + random.nextInt(emitter.anchorCount);
 
-		// Spawn within a small volume around the vertex, not at a point
+		float ax = anchorXs[a];
+		float ay = anchorYs[a];
+		float az = anchorZs[a];
+		if (segmentUsable(a))
+		{
+			ax = prevAnchorXs[a] + (ax - prevAnchorXs[a]) * t;
+			ay = prevAnchorYs[a] + (ay - prevAnchorYs[a]) * t;
+			az = prevAnchorZs[a] + (az - prevAnchorZs[a]) * t;
+		}
+
+		// Spawn within a small volume around the point, not at it exactly
 		float jitter = style.getSpawnJitter();
 		double jitterAngle = random.nextFloat() * 2 * Math.PI;
 		float jitterRadius = jitter * (float) Math.sqrt(random.nextFloat());
-		float x = anchorXs[a] + (float) Math.cos(jitterAngle) * jitterRadius;
-		float y = anchorYs[a] + (float) Math.sin(jitterAngle) * jitterRadius;
-		float z = anchorZs[a] + (random.nextFloat() - 0.5f) * jitter;
+		float x = ax + (float) Math.cos(jitterAngle) * jitterRadius;
+		float y = ay + (float) Math.sin(jitterAngle) * jitterRadius;
+		float z = az + (random.nextFloat() - 0.5f) * jitter;
 
 		float spread = style.getSpreadSpeed();
 		float velX = (random.nextFloat() - 0.5f) * spread;

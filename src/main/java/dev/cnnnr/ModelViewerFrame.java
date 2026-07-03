@@ -107,6 +107,7 @@ class ModelViewerFrame extends JFrame
 	private final JSpinner alphaSpinner = new JSpinner(new SpinnerNumberModel(150, 0, 255, 5));
 	private final JSpinner sizeSpinner = new JSpinner(new SpinnerNumberModel(12, 2, 64, 1));
 	private final JSpinner rateSpinner = new JSpinner(new SpinnerNumberModel(80, 0, 1000, 5));
+	private final JSpinner trailSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 200, 5));
 	private final JSpinner lifetimeSpinner = new JSpinner(new SpinnerNumberModel(2400, 100, 10000, 100));
 	private final JSpinner riseSpinner = new JSpinner(new SpinnerNumberModel(26, 0, 256, 2));
 	private final JSpinner spreadSpinner = new JSpinner(new SpinnerNumberModel(12, 0, 256, 2));
@@ -206,6 +207,8 @@ class ModelViewerFrame extends JFrame
 		grid.add(sizeSpinner);
 		grid.add(new JLabel("Rate /s"));
 		grid.add(rateSpinner);
+		grid.add(new JLabel("Trail / tile"));
+		grid.add(trailSpinner);
 		grid.add(new JLabel("Lifetime ms"));
 		grid.add(lifetimeSpinner);
 		grid.add(new JLabel("Rise"));
@@ -248,6 +251,8 @@ class ModelViewerFrame extends JFrame
 		alphaSpinner.addChangeListener(e -> saveStyle());
 		sizeSpinner.addChangeListener(e -> saveStyle());
 		rateSpinner.addChangeListener(e -> saveStyle());
+		trailSpinner.addChangeListener(e -> saveStyle());
+		trailSpinner.setToolTipText("Particles per tile of emitter movement, spread evenly along the path - for weapon trails. Combine with Rate 0 for a pure ribbon.");
 		lifetimeSpinner.addChangeListener(e -> saveStyle());
 		riseSpinner.addChangeListener(e -> saveStyle());
 		spreadSpinner.addChangeListener(e -> saveStyle());
@@ -381,6 +386,7 @@ class ModelViewerFrame extends JFrame
 		alphaSpinner.setValue(color.getAlpha());
 		sizeSpinner.setValue(profile.getSize());
 		rateSpinner.setValue(profile.getParticlesPerSecond());
+		trailSpinner.setValue(profile.getTrailDensity());
 		lifetimeSpinner.setValue(profile.getLifetimeMs());
 		riseSpinner.setValue(profile.getRiseSpeed());
 		spreadSpinner.setValue(profile.getSpreadSpeed());
@@ -418,6 +424,7 @@ class ModelViewerFrame extends JFrame
 		alphaSpinner.setEnabled(enabled);
 		sizeSpinner.setEnabled(enabled);
 		rateSpinner.setEnabled(enabled);
+		trailSpinner.setEnabled(enabled);
 		lifetimeSpinner.setEnabled(enabled);
 		riseSpinner.setEnabled(enabled);
 		spreadSpinner.setEnabled(enabled);
@@ -453,6 +460,7 @@ class ModelViewerFrame extends JFrame
 		profile.setColor(argb);
 		profile.setSize((int) sizeSpinner.getValue());
 		profile.setParticlesPerSecond((int) rateSpinner.getValue());
+		profile.setTrailDensity((int) trailSpinner.getValue());
 		profile.setLifetimeMs((int) lifetimeSpinner.getValue());
 		profile.setRiseSpeed((int) riseSpinner.getValue());
 		profile.setSpreadSpeed((int) spreadSpinner.getValue());

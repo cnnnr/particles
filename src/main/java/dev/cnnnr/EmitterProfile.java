@@ -51,6 +51,13 @@ class EmitterProfile
 	 */
 	private int size = 6;
 	private int particlesPerSecond = 60;
+	/**
+	 * Particles per tile of emitter movement, spread evenly along each
+	 * anchor's path since the last tick. Spatially uniform emission for
+	 * ribbon-like weapon trails; 0 = off. Combine with rate 0 for a pure
+	 * trail that only emits while the anchor moves.
+	 */
+	private int trailDensity = 0;
 	private int lifetimeMs = 600;
 	/**
 	 * Upward drift in local units per second.
@@ -100,6 +107,7 @@ class EmitterProfile
 		color = other.color;
 		size = other.size;
 		particlesPerSecond = other.particlesPerSecond;
+		trailDensity = other.trailDensity;
 		lifetimeMs = other.lifetimeMs;
 		riseSpeed = other.riseSpeed;
 		spreadSpeed = other.spreadSpeed;

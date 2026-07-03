@@ -26,6 +26,10 @@ class ParticleStyle
 	private final ModelData[][] templates;
 	private final float lifetimeSec;
 	private final float particlesPerSecond;
+	/**
+	 * Particles per tile of anchor movement; 0 = off. See EmitterProfile.
+	 */
+	private final float trailDensity;
 	private final float riseSpeed;
 	private final float spreadSpeed;
 	private final float spawnJitter;
@@ -46,6 +50,7 @@ class ParticleStyle
 		this.templates = templates;
 		this.lifetimeSec = profile.getLifetimeMs() / 1000f;
 		this.particlesPerSecond = profile.getParticlesPerSecond();
+		this.trailDensity = profile.getTrailDensity();
 		this.riseSpeed = profile.getRiseSpeed();
 		this.spreadSpeed = profile.getSpreadSpeed();
 		this.spawnJitter = profile.getSpawnJitter();
