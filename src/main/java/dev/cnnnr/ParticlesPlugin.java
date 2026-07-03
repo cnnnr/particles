@@ -11,6 +11,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -26,6 +28,7 @@ import net.runelite.api.Model;
 import net.runelite.api.Perspective;
 import net.runelite.api.Player;
 import net.runelite.api.PlayerComposition;
+import net.runelite.api.Projectile;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.GameStateChanged;
@@ -191,9 +194,45 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private volatile Set<String> presentSignatures = Set.of();
 
+	/**
+	 * A projectile-targeted profile that passed its gear gate; matched
+	 * against active projectiles by ID every tick.
+	 */
+	private static class ActiveProjectileProfile
+	{
+		final int projectileId;
+		final ParticleStyle style;
+
+		ActiveProjectileProfile(int projectileId, ParticleStyle style)
+		{
+			this.projectileId = projectileId;
+			this.style = style;
+		}
+	}
+
+	/**
+	 * Per-projectile state: last tick's position for trail segments, and
+	 * fractional emission carries per matched style.
+	 */
+	private static class ProjectileTracker
+	{
+		float prevX, prevY, prevZ;
+		boolean prevValid;
+		int stamp;
+		final Map<ParticleStyle, double[]> carries = new HashMap<>();
+	}
+
 	// Emitter resolution cache: rebuilt only when gear or profiles change.
 	// Client thread.
 	private final List<ActiveEmitter> activeEmitters = new ArrayList<>();
+	private final List<ActiveProjectileProfile> activeProjectileProfiles = new ArrayList<>();
+	private final Map<Projectile, ProjectileTracker> projectileTrackers = new HashMap<>();
+	private int projectileStamp;
+	/**
+	 * Recently seen projectile IDs -> [count, lastSeenMs], for the picker's
+	 * capture list. Client thread.
+	 */
+	private final LinkedHashMap<Integer, long[]> recentProjectiles = new LinkedHashMap<>();
 	private int[] resolvedEquipmentIds;
 	private int resolvedRevision = -1;
 	private int stylesRevision = -1;
@@ -338,6 +377,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 		updateAnchors(player);
 		emit(dt, player);
+		emitProjectiles(dt);
 		particleSystem.update(dt, deathStats);
 		renderer.sync(particleSystem.getParticles(), anchorWorldView, anchorLevel);
 		updateStats(now);
@@ -567,7 +607,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
 			{
 				EmitterProfile profile = entry.getValue();
-				if (!piece.getSignature().equals(profile.getSignature())
+				if (!EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType())
+					|| !piece.getSignature().equals(profile.getSignature())
 					|| !profile.isEnabled()
 					|| profile.getVertices().isEmpty())
 				{
@@ -607,6 +648,27 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				activeEmitters.add(new ActiveEmitter(style, vertices, chains));
 			}
 		}
+
+		// Projectile-targeted profiles, gear-gated like player pieces
+		activeProjectileProfiles.clear();
+		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (!profile.isProjectileTarget() || !profile.isEnabled() || profile.getProjectileId() < 0)
+			{
+				continue;
+			}
+			if (!profile.getItemIds().isEmpty() && Collections.disjoint(profile.getItemIds(), wornItemIds))
+			{
+				continue;
+			}
+			ParticleStyle style = renderer.getStyle(entry.getKey());
+			if (style != null)
+			{
+				activeProjectileProfiles.add(new ActiveProjectileProfile(profile.getProjectileId(), style));
+			}
+		}
+		projectileTrackers.clear();
 
 		if (!present.equals(presentSignatures))
 		{
@@ -897,7 +959,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			az = prevAnchorZs[a] + (az - prevAnchorZs[a]) * t;
 		}
 
-		spawnAt(emitter, ax, ay, az);
+		spawnAt(emitter.style, ax, ay, az);
 	}
 
 	/**
@@ -943,7 +1005,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			z = pz + (z - pz) * timeT;
 		}
 
-		spawnAt(emitter, x, y, z);
+		spawnAt(emitter.style, x, y, z);
 	}
 
 	/**
@@ -974,10 +1036,131 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		return inv * inv * m1 + 2f * inv * t * b + t * t * m2;
 	}
 
-	private void spawnAt(ActiveEmitter emitter, float ax, float ay, float az)
+	/**
+	 * Emit for projectile-targeted profiles: every active projectile whose ID
+	 * matches an enabled profile emits along its movement segment - trail
+	 * density is the natural driver for comet tails. Also records recently
+	 * seen projectile IDs for the picker's capture list. The player animation
+	 * gate doesn't apply here; projectiles are inherently lifecycle-gated.
+	 */
+	private void emitProjectiles(float dt)
 	{
-		ParticleStyle style = emitter.style;
+		projectileStamp++;
+		long nowMs = System.currentTimeMillis();
+		int budget = config.maxParticles();
 
+		for (Projectile projectile : client.getProjectiles())
+		{
+			if (client.getGameCycle() < projectile.getStartCycle())
+			{
+				// Queued but not launched yet
+				continue;
+			}
+
+			ProjectileTracker tracker = projectileTrackers.get(projectile);
+			if (tracker == null)
+			{
+				tracker = new ProjectileTracker();
+				projectileTrackers.put(projectile, tracker);
+				noteRecentProjectile(projectile.getId(), nowMs);
+			}
+			tracker.stamp = projectileStamp;
+
+			float x = (float) projectile.getX();
+			float y = (float) projectile.getY();
+			float z = (float) projectile.getZ();
+			float px = tracker.prevX;
+			float py = tracker.prevY;
+			float pz = tracker.prevZ;
+			float distSq = (x - px) * (x - px) + (y - py) * (y - py) + (z - pz) * (z - pz);
+			boolean segment = tracker.prevValid && distSq <= MAX_TRAIL_SEGMENT * MAX_TRAIL_SEGMENT;
+			tracker.prevX = x;
+			tracker.prevY = y;
+			tracker.prevZ = z;
+			tracker.prevValid = true;
+
+			for (ActiveProjectileProfile profile : activeProjectileProfiles)
+			{
+				if (profile.projectileId != projectile.getId())
+				{
+					continue;
+				}
+				ParticleStyle style = profile.style;
+				double[] carries = tracker.carries.computeIfAbsent(style, s -> new double[2]);
+
+				// Time-based emission, spread along this tick's movement
+				float sustainable = budget / style.getLifetimeSec() * 0.95f;
+				carries[0] += Math.min(style.getParticlesPerSecond(), sustainable) * dt;
+				int count = (int) carries[0];
+				carries[0] -= count;
+				for (int i = 0; i < count; i++)
+				{
+					if (particleSystem.getParticles().size() >= budget)
+					{
+						return;
+					}
+					float t = segment ? random.nextFloat() : 1f;
+					spawnAt(style, px + (x - px) * t, py + (y - py) * t, pz + (z - pz) * t);
+				}
+
+				// Distance-based ribbon emission
+				if (style.getTrailDensity() > 0 && segment)
+				{
+					double owed = carries[1] + Math.sqrt(distSq) / 128f * style.getTrailDensity();
+					int n = (int) owed;
+					carries[1] = owed - n;
+					for (int i = 0; i < n; i++)
+					{
+						if (particleSystem.getParticles().size() >= budget)
+						{
+							return;
+						}
+						float t = (i + random.nextFloat()) / n;
+						spawnAt(style, px + (x - px) * t, py + (y - py) * t, pz + (z - pz) * t);
+					}
+				}
+			}
+		}
+
+		// Drop trackers whose projectiles ended
+		Iterator<ProjectileTracker> it = projectileTrackers.values().iterator();
+		while (it.hasNext())
+		{
+			if (it.next().stamp != projectileStamp)
+			{
+				it.remove();
+			}
+		}
+	}
+
+	private void noteRecentProjectile(int projectileId, long nowMs)
+	{
+		long[] seen = recentProjectiles.get(projectileId);
+		if (seen != null)
+		{
+			seen[0]++;
+			seen[1] = nowMs;
+			return;
+		}
+		if (recentProjectiles.size() >= 24)
+		{
+			Integer oldestId = null;
+			long oldestSeen = Long.MAX_VALUE;
+			for (Map.Entry<Integer, long[]> entry : recentProjectiles.entrySet())
+			{
+				if (entry.getValue()[1] < oldestSeen)
+				{
+					oldestSeen = entry.getValue()[1];
+					oldestId = entry.getKey();
+				}
+			}
+			recentProjectiles.remove(oldestId);
+		}
+		recentProjectiles.put(projectileId, new long[]{1, nowMs});
+	}
+
+	private void spawnAt(ParticleStyle style, float ax, float ay, float az)
+	{
 		// Spawn within a small volume around the point, not at it exactly
 		float jitter = style.getSpawnJitter();
 		double jitterAngle = random.nextFloat() * 2 * Math.PI;
@@ -1051,6 +1234,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				wornItems.add(itemId + " - " + client.getItemDefinition(itemId).getName());
 			}
+			List<int[]> recent = recentProjectileList();
 			SwingUtilities.invokeLater(() ->
 			{
 				viewerSnapshot = snapshot;
@@ -1058,7 +1242,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				{
 					viewerFrame.setSnapshot(snapshot,
 						selectedGlobals(snapshot, viewerFrame.getSelectedProfileKey()),
-						profileEntriesBySignature(), wornItems);
+						profileEntriesBySignature(), wornItems,
+						projectileProfileEntries(), recent);
 				}
 			});
 		});
@@ -1085,7 +1270,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (profileKey != null)
 		{
 			EmitterProfile selected = store.snapshotAll().get(profileKey);
-			if (selected != null && !signaturePresent(snapshot, selected.getSignature()))
+			if (selected != null && !selected.isProjectileTarget()
+				&& !signaturePresent(snapshot, selected.getSignature()))
 			{
 				if (javax.swing.JOptionPane.showConfirmDialog(viewerFrame,
 					"Re-attach profile '" + selected.getName() + "' to this piece? Its vertices will be re-picked.",
@@ -1204,6 +1390,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		refreshViewerMarkers();
 	}
 
+	@Override
+	public String createProjectileProfile(int projectileId)
+	{
+		return store.ensureProjectileProfile(projectileId, "proj " + projectileId);
+	}
+
 	// ====================================================================
 
 	/**
@@ -1257,7 +1449,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			viewerFrame.selectProfileOnNextSnapshot(selectProfileKey);
 		}
-		viewerFrame.refreshRows(profileEntriesBySignature());
+		viewerFrame.refreshRows(profileEntriesBySignature(), projectileProfileEntries());
 	}
 
 	private void refreshViewerMarkers()
@@ -1295,6 +1487,41 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 						out.add(piece.getVertices()[local]);
 					}
 				}
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Recently seen projectiles as [id, count, secondsAgo], newest first.
+	 * Client thread.
+	 */
+	private List<int[]> recentProjectileList()
+	{
+		long nowMs = System.currentTimeMillis();
+		List<int[]> out = new ArrayList<>(recentProjectiles.size());
+		for (Map.Entry<Integer, long[]> entry : recentProjectiles.entrySet())
+		{
+			out.add(new int[]{
+				entry.getKey(),
+				(int) entry.getValue()[0],
+				(int) ((nowMs - entry.getValue()[1]) / 1000)});
+		}
+		out.sort((a, b) -> Integer.compare(a[2], b[2]));
+		return out;
+	}
+
+	private List<ModelViewerFrame.ProfileEntry> projectileProfileEntries()
+	{
+		List<ModelViewerFrame.ProfileEntry> out = new ArrayList<>();
+		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (profile.isProjectileTarget())
+			{
+				out.add(new ModelViewerFrame.ProfileEntry(entry.getKey(),
+					profile.getName() + " [proj " + profile.getProjectileId() + "]",
+					!profile.getItemIds().isEmpty()));
 			}
 		}
 		return out;

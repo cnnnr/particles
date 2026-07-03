@@ -34,11 +34,13 @@ import javax.swing.event.DocumentListener;
 import lombok.Getter;
 
 /**
- * Dev tool window: emitter profiles and mesh pieces of the player model on
- * the left with a per-profile particle style editor, orbitable wireframe
- * viewport on the right. Clicking a vertex toggles it as an emitter of the
- * selected profile; profiles can be duplicated and gated on worn item IDs so
- * recolored variants of one model get their own particles.
+ * Dev tool window with a target mode selector: player-model authoring
+ * (emitter profiles and mesh pieces on the left with a per-profile style
+ * editor, orbitable wireframe viewport on the right; clicking a vertex
+ * toggles it as an emitter) and projectile authoring (profiles plus a live
+ * capture list of recently seen projectile IDs). Profiles can be duplicated
+ * and gated on worn item IDs so recolored variants of one model get their
+ * own particles.
  */
 class ModelViewerFrame extends JFrame
 {
@@ -64,6 +66,8 @@ class ModelViewerFrame extends JFrame
 		String duplicateProfile(String profileKey);
 
 		void deleteProfile(String profileKey);
+
+		String createProjectileProfile(int projectileId);
 	}
 
 	/**
@@ -88,11 +92,21 @@ class ModelViewerFrame extends JFrame
 		final int pieceIndex;
 		@Nullable
 		final String profileKey;
+		/**
+		 * Projectile ID of a capture-list row, or -1.
+		 */
+		final int captureId;
 
 		Row(int pieceIndex, @Nullable String profileKey)
 		{
+			this(pieceIndex, profileKey, -1);
+		}
+
+		Row(int pieceIndex, @Nullable String profileKey, int captureId)
+		{
 			this.pieceIndex = pieceIndex;
 			this.profileKey = profileKey;
+			this.captureId = captureId;
 		}
 	}
 
@@ -101,6 +115,9 @@ class ModelViewerFrame extends JFrame
 	private final DefaultListModel<String> rowListModel = new DefaultListModel<>();
 	private final JList<String> rowList;
 	private final List<Row> rows = new ArrayList<>();
+	private final JComboBox<String> modeSelector = new JComboBox<>(new String[]{"Player model", "Projectiles"});
+	private final JPanel projectileAddPanel = new JPanel(new BorderLayout(4, 0));
+	private final JTextField projectileIdField = new JTextField();
 
 	// Style editor controls
 	private final JButton colorButton = new JButton();
@@ -112,10 +129,10 @@ class ModelViewerFrame extends JFrame
 	private final JSpinner riseSpinner = new JSpinner(new SpinnerNumberModel(26, 0, 256, 2));
 	private final JSpinner spreadSpinner = new JSpinner(new SpinnerNumberModel(12, 0, 256, 2));
 	private final JSpinner jitterSpinner = new JSpinner(new SpinnerNumberModel(10, 0, 64, 1));
+	private final JSpinner featherSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 8, 1));
 	private final JSpinner offsetXSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
 	private final JSpinner offsetYSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
 	private final JSpinner offsetZSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
-	private final JSpinner featherSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 8, 1));
 	private final JTextField itemFilterField = new JTextField();
 	private final JTextField animFilterField = new JTextField();
 	private final JTextField animFramesField = new JTextField();
@@ -129,10 +146,18 @@ class ModelViewerFrame extends JFrame
 	@Getter
 	@Nullable
 	private String selectedProfileKey;
+	private int selectedCaptureId = -1;
 	private String pendingSelection;
 	private boolean populating;
 	private boolean rebuildingRows;
+	private boolean updatingMode;
+	private boolean projectileMode;
 	private int appliedPieceIndex = -1;
+
+	// Latest data from the plugin, cached so mode switches can rebuild rows
+	private Map<String, List<ProfileEntry>> profilesBySignature = Map.of();
+	private List<ProfileEntry> projectileEntries = List.of();
+	private List<int[]> recentProjectiles = List.of();
 
 	ModelViewerFrame(Callbacks callbacks)
 	{
@@ -141,8 +166,20 @@ class ModelViewerFrame extends JFrame
 		this.callbacks = callbacks;
 
 		viewport = new ViewportPanel(
-			vertex -> callbacks.vertexToggled(selectedProfileKey, vertex),
-			(vertices, add) -> callbacks.boxSelected(selectedProfileKey, vertices, add));
+			vertex ->
+			{
+				if (!projectileMode)
+				{
+					callbacks.vertexToggled(selectedProfileKey, vertex);
+				}
+			},
+			(vertices, add) ->
+			{
+				if (!projectileMode)
+				{
+					callbacks.boxSelected(selectedProfileKey, vertices, add);
+				}
+			});
 
 		rowList = new JList<>(rowListModel);
 		rowList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -157,9 +194,11 @@ class ModelViewerFrame extends JFrame
 			// Only refit the viewport when the piece actually changes, so row
 			// refreshes (e.g. a click creating a profile) keep the camera
 			boolean pieceChanged = row.pieceIndex != appliedPieceIndex;
-			boolean profileChanged = !Objects.equals(row.profileKey, selectedProfileKey);
+			boolean profileChanged = !Objects.equals(row.profileKey, selectedProfileKey)
+				|| row.captureId != selectedCaptureId;
 			appliedPieceIndex = row.pieceIndex;
 			selectedProfileKey = row.profileKey;
+			selectedCaptureId = row.captureId;
 			if (pieceChanged)
 			{
 				viewport.setPieceFilter(row.pieceIndex);
@@ -171,20 +210,50 @@ class ModelViewerFrame extends JFrame
 			}
 		});
 
+		modeSelector.addActionListener(e ->
+		{
+			if (updatingMode)
+			{
+				return;
+			}
+			projectileMode = modeSelector.getSelectedIndex() == 1;
+			projectileAddPanel.setVisible(projectileMode);
+			if (snapshot != null)
+			{
+				rebuildRows();
+			}
+		});
+
 		JButton refresh = new JButton("Refresh snapshot");
 		refresh.addActionListener(e -> callbacks.refreshSnapshot());
+
+		JPanel top = new JPanel(new GridLayout(0, 1, 0, 4));
+		top.add(modeSelector);
+		top.add(refresh);
+
+		JButton addProjectile = new JButton("Add");
+		addProjectile.setToolTipText("Create a profile for the typed projectile ID, or the selected capture row");
+		addProjectile.addActionListener(e -> addProjectileProfile());
+		projectileIdField.setToolTipText("Projectile ID; leave blank to use the selected capture row");
+		projectileAddPanel.add(new JLabel("ID "), BorderLayout.WEST);
+		projectileAddPanel.add(projectileIdField, BorderLayout.CENTER);
+		projectileAddPanel.add(addProjectile, BorderLayout.EAST);
+		projectileAddPanel.setVisible(false);
 
 		JCheckBox labelAll = new JCheckBox("Label emitter vertices");
 		labelAll.addActionListener(e -> viewport.setLabelAll(labelAll.isSelected()));
 
 		JPanel left = new JPanel(new BorderLayout(0, 6));
 		left.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
-		left.add(refresh, BorderLayout.NORTH);
+		left.add(top, BorderLayout.NORTH);
 		left.add(new JScrollPane(rowList), BorderLayout.CENTER);
 
 		JPanel bottom = new JPanel(new BorderLayout(0, 6));
-		bottom.add(labelAll, BorderLayout.NORTH);
-		bottom.add(buildStyleEditor(), BorderLayout.CENTER);
+		bottom.add(projectileAddPanel, BorderLayout.NORTH);
+		JPanel bottomMid = new JPanel(new BorderLayout(0, 6));
+		bottomMid.add(labelAll, BorderLayout.NORTH);
+		bottomMid.add(buildStyleEditor(), BorderLayout.CENTER);
+		bottom.add(bottomMid, BorderLayout.CENTER);
 		left.add(bottom, BorderLayout.SOUTH);
 		left.setPreferredSize(new Dimension(250, 0));
 
@@ -194,6 +263,29 @@ class ModelViewerFrame extends JFrame
 
 		setSize(1040, 780);
 		setLocationRelativeTo(null);
+	}
+
+	private void addProjectileProfile()
+	{
+		int id = -1;
+		try
+		{
+			id = Integer.parseInt(projectileIdField.getText().trim());
+		}
+		catch (NumberFormatException ignored)
+		{
+		}
+		if (id < 0)
+		{
+			id = selectedCaptureId;
+		}
+		if (id < 0)
+		{
+			return;
+		}
+		projectileIdField.setText("");
+		pendingSelection = callbacks.createProjectileProfile(id);
+		callbacks.refreshSnapshot();
 	}
 
 	private JPanel buildStyleEditor()
@@ -251,7 +343,7 @@ class ModelViewerFrame extends JFrame
 		sizeSpinner.addChangeListener(e -> saveStyle());
 		rateSpinner.addChangeListener(e -> saveStyle());
 		trailSpinner.addChangeListener(e -> saveStyle());
-		trailSpinner.setToolTipText("Particles per tile of emitter movement, spread evenly along the path - for weapon trails. Combine with Rate 0 for a pure ribbon.");
+		trailSpinner.setToolTipText("Particles per tile of emitter movement, spread evenly along the path - for weapon and projectile trails. Combine with Rate 0 for a pure ribbon.");
 		lifetimeSpinner.addChangeListener(e -> saveStyle());
 		riseSpinner.addChangeListener(e -> saveStyle());
 		spreadSpinner.addChangeListener(e -> saveStyle());
@@ -261,6 +353,7 @@ class ModelViewerFrame extends JFrame
 		offsetXSpinner.addChangeListener(e -> saveStyle());
 		offsetYSpinner.addChangeListener(e -> saveStyle());
 		offsetZSpinner.addChangeListener(e -> saveStyle());
+
 		// Save on every edit - an ActionListener would only fire on Enter,
 		// silently discarding edits when the field loses focus instead
 		DocumentListener saveOnEdit = new DocumentListener()
@@ -304,7 +397,7 @@ class ModelViewerFrame extends JFrame
 			saveStyle();
 		});
 
-		duplicateButton.setToolTipText("Clone this profile so another item variant of the same mesh gets its own particles");
+		duplicateButton.setToolTipText("Clone this profile so another item variant gets its own particles");
 		duplicateButton.addActionListener(e ->
 		{
 			if (selectedProfileKey == null)
@@ -372,9 +465,20 @@ class ModelViewerFrame extends JFrame
 		EmitterProfile profile = selectedProfile();
 		if (profile == null)
 		{
-			editorHint.setText(selectedProfileKey == null
-				? "Click a vertex to create emitters"
-				: "Profile missing; refresh the snapshot");
+			if (selectedCaptureId >= 0)
+			{
+				editorHint.setText("Press Add to create a profile for projectile " + selectedCaptureId);
+			}
+			else if (projectileMode)
+			{
+				editorHint.setText("Select a profile, or a seen projectile and press Add");
+			}
+			else
+			{
+				editorHint.setText(selectedProfileKey == null
+					? "Click a vertex to create emitters"
+					: "Profile missing; refresh the snapshot");
+			}
 			setEditorEnabled(false);
 			return;
 		}
@@ -401,6 +505,15 @@ class ModelViewerFrame extends JFrame
 
 		editorHint.setText(profile.getName());
 		setEditorEnabled(true);
+
+		// Vertex-anchored settings don't apply to projectiles
+		boolean projectile = profile.isProjectileTarget();
+		featherSpinner.setEnabled(!projectile);
+		offsetXSpinner.setEnabled(!projectile);
+		offsetYSpinner.setEnabled(!projectile);
+		offsetZSpinner.setEnabled(!projectile);
+		animFilterField.setEnabled(!projectile);
+		animFramesField.setEnabled(!projectile);
 	}
 
 	private static String joinIds(Set<Integer> ids)
@@ -494,89 +607,148 @@ class ModelViewerFrame extends JFrame
 	}
 
 	/**
-	 * Swap in a new snapshot. Must be called on the Swing EDT.
-	 *
-	 * @param profilesBySignature profile list entries per piece signature
-	 * @param wornItems currently worn items as "id - name" strings
+	 * Swap in a new snapshot and fresh profile data. Must be called on the
+	 * Swing EDT.
 	 */
 	void setSnapshot(ModelSnapshot snapshot, Set<Integer> selectedVertices,
-		Map<String, List<ProfileEntry>> profilesBySignature, List<String> wornItems)
+		Map<String, List<ProfileEntry>> profilesBySignature, List<String> wornItems,
+		List<ProfileEntry> projectileEntries, List<int[]> recentProjectiles)
 	{
 		this.snapshot = snapshot;
+		this.profilesBySignature = profilesBySignature;
+		this.projectileEntries = projectileEntries;
+		this.recentProjectiles = recentProjectiles;
 		appliedPieceIndex = Integer.MIN_VALUE;
 		viewport.setSnapshot(snapshot);
 		viewport.setSelectedVertices(selectedVertices);
 
 		wornItemsCombo.setModel(new DefaultComboBoxModel<>(wornItems.toArray(new String[0])));
-		rebuildRows(profilesBySignature);
+
+		// Editing a projectile profile from the sidebar lands in its mode
+		if (pendingSelection != null)
+		{
+			boolean pendingIsProjectile = false;
+			for (ProfileEntry entry : projectileEntries)
+			{
+				if (entry.key.equals(pendingSelection))
+				{
+					pendingIsProjectile = true;
+					break;
+				}
+			}
+			setMode(pendingIsProjectile);
+		}
+		rebuildRows();
+	}
+
+	private void setMode(boolean projectile)
+	{
+		if (projectileMode == projectile)
+		{
+			return;
+		}
+		updatingMode = true;
+		projectileMode = projectile;
+		modeSelector.setSelectedIndex(projectile ? 1 : 0);
+		projectileAddPanel.setVisible(projectile);
+		updatingMode = false;
 	}
 
 	/**
-	 * Rebuild the profile/piece rows against the current snapshot, e.g. after
-	 * a vertex click created a profile. Keeps the camera. EDT only.
+	 * Rebuild the rows with fresh profile data, e.g. after a vertex click
+	 * created a profile. Keeps the camera. EDT only.
 	 */
-	void refreshRows(Map<String, List<ProfileEntry>> profilesBySignature)
+	void refreshRows(Map<String, List<ProfileEntry>> profilesBySignature, List<ProfileEntry> projectileEntries)
 	{
+		this.profilesBySignature = profilesBySignature;
+		this.projectileEntries = projectileEntries;
 		if (snapshot != null)
 		{
-			rebuildRows(profilesBySignature);
+			rebuildRows();
 		}
 	}
 
-	private void rebuildRows(Map<String, List<ProfileEntry>> profilesBySignature)
+	private void rebuildRows()
 	{
 		rebuildingRows = true;
 		rowListModel.clear();
 		rows.clear();
-		rowListModel.addElement("All pieces (" + snapshot.getVertexCount() + "v)");
-		rows.add(new Row(-1, null));
-
 		int selectRow = 0;
-		int i = 0;
-		Set<String> presentSignatures = new HashSet<>();
-		for (ModelSnapshot.Piece piece : snapshot.getPieces())
+
+		if (!projectileMode)
 		{
-			presentSignatures.add(piece.getSignature());
-			String counts = " (" + piece.getVertices().length + "v, " + piece.getFaces().length + "f)";
-			List<ProfileEntry> entries = profilesBySignature.get(piece.getSignature());
-			if (entries == null || entries.isEmpty())
+			rowListModel.addElement("All pieces (" + snapshot.getVertexCount() + "v)");
+			rows.add(new Row(-1, null));
+
+			int i = 0;
+			Set<String> presentSignatures = new HashSet<>();
+			for (ModelSnapshot.Piece piece : snapshot.getPieces())
 			{
-				rowListModel.addElement("Piece " + (i + 1) + counts);
-				rows.add(new Row(i, null));
-			}
-			else
-			{
-				for (ProfileEntry entry : entries)
+				presentSignatures.add(piece.getSignature());
+				String counts = " (" + piece.getVertices().length + "v, " + piece.getFaces().length + "f)";
+				List<ProfileEntry> entries = profilesBySignature.get(piece.getSignature());
+				if (entries == null || entries.isEmpty())
 				{
-					rowListModel.addElement(entry.name + (entry.filtered ? " [item-gated]" : "") + counts);
-					rows.add(new Row(i, entry.key));
+					rowListModel.addElement("Piece " + (i + 1) + counts);
+					rows.add(new Row(i, null));
+				}
+				else
+				{
+					for (ProfileEntry entry : entries)
+					{
+						rowListModel.addElement(entry.name + (entry.filtered ? " [item-gated]" : "") + counts);
+						rows.add(new Row(i, entry.key));
+						if (entry.key.equals(pendingSelection))
+						{
+							selectRow = rows.size() - 1;
+						}
+					}
+				}
+				i++;
+			}
+
+			// Profiles whose piece isn't on this model: selectable so their
+			// style can still be edited, and clicking a vertex re-attaches them
+			for (Map.Entry<String, List<ProfileEntry>> mapEntry : profilesBySignature.entrySet())
+			{
+				if (presentSignatures.contains(mapEntry.getKey()))
+				{
+					continue;
+				}
+				for (ProfileEntry entry : mapEntry.getValue())
+				{
+					rowListModel.addElement(entry.name + " (not on model)");
+					rows.add(new Row(-1, entry.key));
 					if (entry.key.equals(pendingSelection))
 					{
 						selectRow = rows.size() - 1;
 					}
 				}
 			}
-			i++;
 		}
-
-		// Profiles whose piece isn't on this model: selectable so their style
-		// can still be edited, and clicking a vertex re-attaches them there
-		for (Map.Entry<String, List<ProfileEntry>> mapEntry : profilesBySignature.entrySet())
+		else
 		{
-			if (presentSignatures.contains(mapEntry.getKey()))
+			for (ProfileEntry entry : projectileEntries)
 			{
-				continue;
-			}
-			for (ProfileEntry entry : mapEntry.getValue())
-			{
-				rowListModel.addElement(entry.name + " (not on model)");
+				rowListModel.addElement(entry.name + (entry.filtered ? " [item-gated]" : ""));
 				rows.add(new Row(-1, entry.key));
 				if (entry.key.equals(pendingSelection))
 				{
 					selectRow = rows.size() - 1;
 				}
 			}
+			for (int[] recent : recentProjectiles)
+			{
+				rowListModel.addElement("seen: " + recent[0] + "  (" + recent[1] + "x, " + recent[2] + "s ago)");
+				rows.add(new Row(-1, null, recent[0]));
+			}
+			if (rows.isEmpty())
+			{
+				rowListModel.addElement("No projectiles seen yet - fire something nearby, then Refresh");
+				rows.add(new Row(-1, null));
+			}
 		}
+
 		pendingSelection = null;
 		rebuildingRows = false;
 		rowList.setSelectedIndex(selectRow);

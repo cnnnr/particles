@@ -79,7 +79,9 @@ class ParticlesPanel extends PluginPanel
 			EmitterProfile profile = entry.getValue();
 
 			boolean worn = presentSignatures.contains(profile.getSignature());
-			String text = profile.getName() + (profile.getItemIds().isEmpty() ? "" : "*");
+			String text = profile.getName()
+				+ (profile.isProjectileTarget() ? " [proj " + profile.getProjectileId() + "]" : "")
+				+ (profile.getItemIds().isEmpty() ? "" : "*");
 
 			JCheckBox toggle = new JCheckBox(text, profile.isEnabled());
 			toggle.setToolTipText(worn

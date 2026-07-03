@@ -89,6 +89,11 @@ class EmitterStore
 						profile.setFeatherStrength(2);
 						profile.setFeather(false);
 					}
+					// Migration: profiles saved before projectile targets
+					if (profile.getTargetType() == null)
+					{
+						profile.setTargetType(EmitterProfile.TARGET_PLAYER);
+					}
 				});
 			}
 		}
@@ -154,8 +159,38 @@ class EmitterStore
 		}
 		EmitterProfile copy = source.copy();
 		copy.setName(source.getName() + " copy");
-		String key = freeKey(source.getSignature());
+		String base = source.isProjectileTarget()
+			? "proj:" + source.getProjectileId()
+			: source.getSignature();
+		String key = freeKey(base);
 		profiles.put(key, copy);
+		save();
+		return key;
+	}
+
+	/**
+	 * @return the key of an existing profile for this projectile ID, or a
+	 * newly created one with trail-friendly defaults
+	 */
+	synchronized String ensureProjectileProfile(int projectileId, String defaultName)
+	{
+		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (profile.isProjectileTarget() && profile.getProjectileId() == projectileId)
+			{
+				return entry.getKey();
+			}
+		}
+		EmitterProfile profile = new EmitterProfile(defaultName);
+		profile.setTargetType(EmitterProfile.TARGET_PROJECTILE);
+		profile.setProjectileId(projectileId);
+		// Trails are what projectile particles are usually for
+		profile.setTrailDensity(40);
+		profile.setRiseSpeed(0);
+		profile.setSpreadSpeed(4);
+		String key = freeKey("proj:" + projectileId);
+		profiles.put(key, profile);
 		save();
 		return key;
 	}

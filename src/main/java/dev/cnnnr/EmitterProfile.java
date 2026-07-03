@@ -14,10 +14,22 @@ import lombok.Setter;
 @Setter
 class EmitterProfile
 {
+	static final String TARGET_PLAYER = "player";
+	static final String TARGET_PROJECTILE = "projectile";
+
 	private String name;
+	/**
+	 * What this profile emits from: a player model piece or a projectile.
+	 */
+	private String targetType = TARGET_PLAYER;
+	/**
+	 * Projectile (graphic) ID for projectile profiles; -1 otherwise.
+	 */
+	private int projectileId = -1;
 	/**
 	 * Topology signature of the mesh piece this profile attaches to. Multiple
 	 * profiles may share a signature (e.g. one per recolored item variant).
+	 * Null for non-player targets.
 	 */
 	private String signature;
 	private boolean enabled = true;
@@ -108,11 +120,18 @@ class EmitterProfile
 	EmitterProfile copy()
 	{
 		EmitterProfile c = new EmitterProfile(name);
+		c.targetType = targetType;
+		c.projectileId = projectileId;
 		c.signature = signature;
 		c.enabled = enabled;
 		c.vertices = new HashSet<>(vertices);
 		c.copyStyleFrom(this);
 		return c;
+	}
+
+	boolean isProjectileTarget()
+	{
+		return TARGET_PROJECTILE.equals(targetType);
 	}
 
 	/**
