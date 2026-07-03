@@ -83,6 +83,12 @@ class EmitterStore
 					{
 						profile.setAnimFrames("");
 					}
+					// Migration: feather flag became a strength
+					if (profile.isFeather() && profile.getFeatherStrength() == 0)
+					{
+						profile.setFeatherStrength(2);
+						profile.setFeather(false);
+					}
 				});
 			}
 		}

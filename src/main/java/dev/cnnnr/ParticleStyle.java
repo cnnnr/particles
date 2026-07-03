@@ -40,7 +40,7 @@ class ParticleStyle
 	private final float riseSpeed;
 	private final float spreadSpeed;
 	private final float spawnJitter;
-	private final boolean feather;
+	private final int featherStrength;
 	/**
 	 * Fixed emit offset from the vertex in model space, applied before the
 	 * player's facing rotation so it turns with them. X sideways, Y
@@ -69,7 +69,7 @@ class ParticleStyle
 		this.riseSpeed = profile.getRiseSpeed();
 		this.spreadSpeed = profile.getSpreadSpeed();
 		this.spawnJitter = profile.getSpawnJitter();
-		this.feather = profile.isFeather();
+		this.featherStrength = profile.getFeatherStrength();
 		this.offsetX = profile.getOffsetX();
 		this.offsetY = profile.getOffsetY();
 		this.offsetZ = profile.getOffsetZ();

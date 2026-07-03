@@ -115,7 +115,7 @@ class ModelViewerFrame extends JFrame
 	private final JSpinner offsetXSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
 	private final JSpinner offsetYSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
 	private final JSpinner offsetZSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
-	private final JCheckBox featherCheck = new JCheckBox();
+	private final JSpinner featherSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 8, 1));
 	private final JTextField itemFilterField = new JTextField();
 	private final JTextField animFilterField = new JTextField();
 	private final JTextField animFramesField = new JTextField();
@@ -218,7 +218,7 @@ class ModelViewerFrame extends JFrame
 		grid.add(new JLabel("Jitter"));
 		grid.add(jitterSpinner);
 		grid.add(new JLabel("Feather"));
-		grid.add(featherCheck);
+		grid.add(featherSpinner);
 		grid.add(new JLabel("Offset X"));
 		grid.add(offsetXSpinner);
 		grid.add(new JLabel("Offset Y"));
@@ -256,8 +256,8 @@ class ModelViewerFrame extends JFrame
 		riseSpinner.addChangeListener(e -> saveStyle());
 		spreadSpinner.addChangeListener(e -> saveStyle());
 		jitterSpinner.addChangeListener(e -> saveStyle());
-		featherCheck.addActionListener(e -> saveStyle());
-		featherCheck.setToolTipText("Emit along a smoothed line chained through the emitter vertices (following mesh edges) instead of at the vertices, softening jagged hems into a continuous band");
+		featherSpinner.addChangeListener(e -> saveStyle());
+		featherSpinner.setToolTipText("Emit along a line chained through the emitter vertices, smoothed over this many neighbors (0 = off). Higher values cut across jagged notches; the marker overlay draws the resulting line.");
 		offsetXSpinner.addChangeListener(e -> saveStyle());
 		offsetYSpinner.addChangeListener(e -> saveStyle());
 		offsetZSpinner.addChangeListener(e -> saveStyle());
@@ -390,7 +390,7 @@ class ModelViewerFrame extends JFrame
 		riseSpinner.setValue(profile.getRiseSpeed());
 		spreadSpinner.setValue(profile.getSpreadSpeed());
 		jitterSpinner.setValue(profile.getSpawnJitter());
-		featherCheck.setSelected(profile.isFeather());
+		featherSpinner.setValue(profile.getFeatherStrength());
 		offsetXSpinner.setValue(profile.getOffsetX());
 		offsetYSpinner.setValue(profile.getOffsetY());
 		offsetZSpinner.setValue(profile.getOffsetZ());
@@ -428,7 +428,7 @@ class ModelViewerFrame extends JFrame
 		riseSpinner.setEnabled(enabled);
 		spreadSpinner.setEnabled(enabled);
 		jitterSpinner.setEnabled(enabled);
-		featherCheck.setEnabled(enabled);
+		featherSpinner.setEnabled(enabled);
 		offsetXSpinner.setEnabled(enabled);
 		offsetYSpinner.setEnabled(enabled);
 		offsetZSpinner.setEnabled(enabled);
@@ -464,7 +464,7 @@ class ModelViewerFrame extends JFrame
 		profile.setRiseSpeed((int) riseSpinner.getValue());
 		profile.setSpreadSpeed((int) spreadSpinner.getValue());
 		profile.setSpawnJitter((int) jitterSpinner.getValue());
-		profile.setFeather(featherCheck.isSelected());
+		profile.setFeatherStrength((int) featherSpinner.getValue());
 		profile.setOffsetX((int) offsetXSpinner.getValue());
 		profile.setOffsetY((int) offsetYSpinner.getValue());
 		profile.setOffsetZ((int) offsetZSpinner.getValue());

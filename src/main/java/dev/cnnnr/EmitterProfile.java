@@ -77,9 +77,14 @@ class EmitterProfile
 	 */
 	private int spawnJitter = 6;
 	/**
-	 * Feathered emission: spawn along a smoothed line chained through the
-	 * emitter vertices (following mesh edges) instead of at the vertices
-	 * themselves, so jagged hems read as a soft continuous band.
+	 * Feathered emission strength: spawn along a line chained through the
+	 * emitter vertices, smoothed by averaging each point over this many
+	 * neighbors to either side. 0 = off, 1 = light rounding, higher values
+	 * cut across jagged notches into a soft continuous band.
+	 */
+	private int featherStrength = 0;
+	/**
+	 * Legacy on/off flag, migrated into {@link #featherStrength} on load.
 	 */
 	private boolean feather = false;
 	/**
@@ -123,7 +128,7 @@ class EmitterProfile
 		riseSpeed = other.riseSpeed;
 		spreadSpeed = other.spreadSpeed;
 		spawnJitter = other.spawnJitter;
-		feather = other.feather;
+		featherStrength = other.featherStrength;
 		offsetX = other.offsetX;
 		offsetY = other.offsetY;
 		offsetZ = other.offsetZ;

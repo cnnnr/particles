@@ -169,6 +169,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private float[] trailCarry = new float[0];
 	/**
+	 * Smoothed feather paths for the debug overlay, one flat [x,y,z, ...] per
+	 * chain. Rebuilt per tick only while markers are shown.
+	 */
+	@Getter
+	private final List<float[]> featherDebugPaths = new ArrayList<>();
+	/**
 	 * Segments longer than this are teleports/rebinds, not movement.
 	 */
 	private static final float MAX_TRAIL_SEGMENT = 256f;
@@ -467,6 +473,36 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			Arrays.fill(trailCarry, 0, trailCarry.length, 0f);
 		}
 		anchorsRebuilt = false;
+
+		// Show the feathered emission line while markers are on, so feather
+		// strength can be tuned visually
+		featherDebugPaths.clear();
+		if (config.showAnchor())
+		{
+			for (ActiveEmitter emitter : activeEmitters)
+			{
+				int w = emitter.style.getFeatherStrength();
+				if (w <= 0 || emitter.chains == null || emitter.anchorCount != emitter.vertices.length)
+				{
+					continue;
+				}
+				for (int[] chain : emitter.chains)
+				{
+					if (chain.length < 2)
+					{
+						continue;
+					}
+					float[] points = new float[chain.length * 3];
+					for (int j = 0; j < chain.length; j++)
+					{
+						points[j * 3] = smoothed(anchorXs, emitter, chain, j, w);
+						points[j * 3 + 1] = smoothed(anchorYs, emitter, chain, j, w);
+						points[j * 3 + 2] = smoothed(anchorZs, emitter, chain, j, w);
+					}
+					featherDebugPaths.add(points);
+				}
+			}
+		}
 	}
 
 	/**
@@ -565,7 +601,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				{
 					vertices[i] = globals.get(i);
 				}
-				int[][] chains = style.isFeather() ? buildChains(snapshot, piece, vertices) : null;
+				int[][] chains = style.getFeatherStrength() > 0
+					? buildChains(snapshot, piece, vertices)
+					: null;
 				activeEmitters.add(new ActiveEmitter(style, vertices, chains));
 			}
 		}
@@ -610,7 +648,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 		// Walk paths from endpoints and junctions first, then leftover cycles
 		boolean[] visited = new boolean[emitterVertices.length];
-		List<int[]> chains = new ArrayList<>();
+		List<List<Integer>> chains = new ArrayList<>();
 		for (int pass = 0; pass < 2; pass++)
 		{
 			for (int start = 0; start < emitterVertices.length; start++)
@@ -639,15 +677,88 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 						}
 					}
 				}
-				int[] chain = new int[path.size()];
-				for (int i = 0; i < chain.length; i++)
-				{
-					chain[i] = path.get(i);
-				}
-				chains.add(chain);
+				chains.add(path);
 			}
 		}
-		return chains.toArray(new int[0][]);
+
+		bridgeChains(snapshot, emitterVertices, chains);
+
+		int[][] result = new int[chains.size()][];
+		for (int c = 0; c < chains.size(); c++)
+		{
+			List<Integer> path = chains.get(c);
+			int[] chain = new int[path.size()];
+			for (int i = 0; i < chain.length; i++)
+			{
+				chain[i] = path.get(i);
+			}
+			result[c] = chain;
+		}
+		return result;
+	}
+
+	/**
+	 * Distance particles will feather across even without a connecting mesh
+	 * edge, e.g. between the separate puffs of a fur trim.
+	 */
+	private static final float CHAIN_BRIDGE_DISTANCE = 40f;
+
+	/**
+	 * Repeatedly join chains whose endpoints are close in space, reversing as
+	 * needed so the joined path stays walkable. Cold path.
+	 */
+	private static void bridgeChains(ModelSnapshot snapshot, int[] emitterVertices, List<List<Integer>> chains)
+	{
+		boolean merged = true;
+		while (merged && chains.size() > 1)
+		{
+			merged = false;
+			outer:
+			for (int i = 0; i < chains.size(); i++)
+			{
+				for (int j = i + 1; j < chains.size(); j++)
+				{
+					List<Integer> a = chains.get(i);
+					List<Integer> b = chains.get(j);
+					// Endpoint pairings: a-head/tail against b-head/tail
+					if (endpointsClose(snapshot, emitterVertices, a.get(a.size() - 1), b.get(0)))
+					{
+						a.addAll(b);
+					}
+					else if (endpointsClose(snapshot, emitterVertices, a.get(a.size() - 1), b.get(b.size() - 1)))
+					{
+						Collections.reverse(b);
+						a.addAll(b);
+					}
+					else if (endpointsClose(snapshot, emitterVertices, a.get(0), b.get(b.size() - 1)))
+					{
+						a.addAll(0, b);
+					}
+					else if (endpointsClose(snapshot, emitterVertices, a.get(0), b.get(0)))
+					{
+						Collections.reverse(b);
+						a.addAll(0, b);
+					}
+					else
+					{
+						continue;
+					}
+					chains.remove(j);
+					merged = true;
+					break outer;
+				}
+			}
+		}
+	}
+
+	private static boolean endpointsClose(ModelSnapshot snapshot, int[] emitterVertices, int offsetA, int offsetB)
+	{
+		int globalA = emitterVertices[offsetA];
+		int globalB = emitterVertices[offsetB];
+		float dx = snapshot.getVerticesX()[globalA] - snapshot.getVerticesX()[globalB];
+		float dy = snapshot.getVerticesY()[globalA] - snapshot.getVerticesY()[globalB];
+		float dz = snapshot.getVerticesZ()[globalA] - snapshot.getVerticesZ()[globalB];
+		return dx * dx + dy * dy + dz * dz <= CHAIN_BRIDGE_DISTANCE * CHAIN_BRIDGE_DISTANCE;
 	}
 
 	private static void chainEdge(Map<Integer, Integer> offsetOf, List<List<Integer>> adjacency,
@@ -721,7 +832,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			int count = (int) emitter.carry;
 			emitter.carry -= count;
 
-			boolean feathered = style.isFeather() && emitter.chains != null
+			boolean feathered = style.getFeatherStrength() > 0 && emitter.chains != null
 				&& emitter.anchorCount == emitter.vertices.length;
 			for (int i = 0; i < count; i++)
 			{
@@ -799,28 +910,56 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		int k = random.nextInt(emitter.sampleChainOf.length);
 		int[] chain = emitter.chains[emitter.sampleChainOf[k]];
 		int j = emitter.samplePosOf[k];
-		int aA = emitter.anchorStart + chain[Math.max(0, j - 1)];
-		int aB = emitter.anchorStart + chain[j];
-		int aC = emitter.anchorStart + chain[Math.min(chain.length - 1, j + 1)];
+		int w = emitter.style.getFeatherStrength();
+		int jA = Math.max(0, j - 1);
+		int jC = Math.min(chain.length - 1, j + 1);
 		float t = random.nextFloat();
 
-		float x = quadratic(anchorXs[aA], anchorXs[aB], anchorXs[aC], t);
-		float y = quadratic(anchorYs[aA], anchorYs[aB], anchorYs[aC], t);
-		float z = quadratic(anchorZs[aA], anchorZs[aB], anchorZs[aC], t);
+		float x = quadratic(smoothed(anchorXs, emitter, chain, jA, w),
+			smoothed(anchorXs, emitter, chain, j, w),
+			smoothed(anchorXs, emitter, chain, jC, w), t);
+		float y = quadratic(smoothed(anchorYs, emitter, chain, jA, w),
+			smoothed(anchorYs, emitter, chain, j, w),
+			smoothed(anchorYs, emitter, chain, jC, w), t);
+		float z = quadratic(smoothed(anchorZs, emitter, chain, jA, w),
+			smoothed(anchorZs, emitter, chain, j, w),
+			smoothed(anchorZs, emitter, chain, jC, w), t);
 
 		// Time-lerp along the anchors' movement this tick, like point spawns
-		if (segmentUsable(aA) && segmentUsable(aB) && segmentUsable(aC))
+		if (segmentUsable(emitter.anchorStart + chain[j]))
 		{
 			float timeT = random.nextFloat();
-			float px = quadratic(prevAnchorXs[aA], prevAnchorXs[aB], prevAnchorXs[aC], t);
-			float py = quadratic(prevAnchorYs[aA], prevAnchorYs[aB], prevAnchorYs[aC], t);
-			float pz = quadratic(prevAnchorZs[aA], prevAnchorZs[aB], prevAnchorZs[aC], t);
+			float px = quadratic(smoothed(prevAnchorXs, emitter, chain, jA, w),
+				smoothed(prevAnchorXs, emitter, chain, j, w),
+				smoothed(prevAnchorXs, emitter, chain, jC, w), t);
+			float py = quadratic(smoothed(prevAnchorYs, emitter, chain, jA, w),
+				smoothed(prevAnchorYs, emitter, chain, j, w),
+				smoothed(prevAnchorYs, emitter, chain, jC, w), t);
+			float pz = quadratic(smoothed(prevAnchorZs, emitter, chain, jA, w),
+				smoothed(prevAnchorZs, emitter, chain, j, w),
+				smoothed(prevAnchorZs, emitter, chain, jC, w), t);
 			x = px + (x - px) * timeT;
 			y = py + (y - py) * timeT;
 			z = pz + (z - pz) * timeT;
 		}
 
 		spawnAt(emitter, x, y, z);
+	}
+
+	/**
+	 * Chain position averaged over a window of neighbors: the feathering
+	 * filter that turns a jagged vertex path into a smooth band.
+	 */
+	private float smoothed(float[] coords, ActiveEmitter emitter, int[] chain, int j, int w)
+	{
+		int from = Math.max(0, j - w);
+		int to = Math.min(chain.length - 1, j + w);
+		float sum = 0;
+		for (int i = from; i <= to; i++)
+		{
+			sum += coords[emitter.anchorStart + chain[i]];
+		}
+		return sum / (to - from + 1);
 	}
 
 	/**

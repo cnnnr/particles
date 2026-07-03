@@ -76,6 +76,23 @@ class ParticlesOverlay extends Overlay
 			graphics.drawOval(canvas.getX() - 3, canvas.getY() - 3, 6, 6);
 		}
 
+		// The feathered emission line, for tuning feather strength
+		for (float[] points : plugin.getFeatherDebugPaths())
+		{
+			Point previous = null;
+			for (int i = 0; i < points.length; i += 3)
+			{
+				Point current = Perspective.localToCanvas(client,
+					plugin.getAnchorWorldView(),
+					(int) points[i], (int) points[i + 1], (int) points[i + 2]);
+				if (previous != null && current != null)
+				{
+					graphics.drawLine(previous.getX(), previous.getY(), current.getX(), current.getY());
+				}
+				previous = current;
+			}
+		}
+
 		return null;
 	}
 }
