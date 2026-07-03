@@ -77,6 +77,12 @@ class EmitterProfile
 	 */
 	private int spawnJitter = 6;
 	/**
+	 * Feathered emission: spawn along a smoothed line chained through the
+	 * emitter vertices (following mesh edges) instead of at the vertices
+	 * themselves, so jagged hems read as a soft continuous band.
+	 */
+	private boolean feather = false;
+	/**
 	 * Fixed emit offset from the vertex in model space (rotates with the
 	 * player's facing), local units. X is sideways, Y is forward/back,
 	 * Z is up (positive).
@@ -117,6 +123,7 @@ class EmitterProfile
 		riseSpeed = other.riseSpeed;
 		spreadSpeed = other.spreadSpeed;
 		spawnJitter = other.spawnJitter;
+		feather = other.feather;
 		offsetX = other.offsetX;
 		offsetY = other.offsetY;
 		offsetZ = other.offsetZ;

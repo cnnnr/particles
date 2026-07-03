@@ -55,14 +55,50 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	{
 		final ParticleStyle style;
 		final int[] vertices;
+		/**
+		 * Feathering: emitter vertices chained along mesh edges, as anchor
+		 * offsets within this emitter; null when feathering is off.
+		 */
+		final int[][] chains;
+		/**
+		 * O(1) uniform sampling over all chain positions.
+		 */
+		final int[] sampleChainOf;
+		final int[] samplePosOf;
 		double carry;
 		int anchorStart;
 		int anchorCount;
 
-		ActiveEmitter(ParticleStyle style, int[] vertices)
+		ActiveEmitter(ParticleStyle style, int[] vertices, int[][] chains)
 		{
 			this.style = style;
 			this.vertices = vertices;
+			this.chains = chains;
+			if (chains != null)
+			{
+				int total = 0;
+				for (int[] chain : chains)
+				{
+					total += chain.length;
+				}
+				sampleChainOf = new int[total];
+				samplePosOf = new int[total];
+				int k = 0;
+				for (int c = 0; c < chains.length; c++)
+				{
+					for (int j = 0; j < chains[c].length; j++)
+					{
+						sampleChainOf[k] = c;
+						samplePosOf[k] = j;
+						k++;
+					}
+				}
+			}
+			else
+			{
+				sampleChainOf = null;
+				samplePosOf = null;
+			}
 		}
 	}
 
@@ -529,7 +565,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				{
 					vertices[i] = globals.get(i);
 				}
-				activeEmitters.add(new ActiveEmitter(style, vertices));
+				int[][] chains = style.isFeather() ? buildChains(snapshot, piece, vertices) : null;
+				activeEmitters.add(new ActiveEmitter(style, vertices, chains));
 			}
 		}
 
@@ -537,6 +574,96 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			presentSignatures = present;
 			refreshPanel();
+		}
+	}
+
+	/**
+	 * Chain an emitter's vertices along the mesh edges of their piece, for
+	 * feathered emission. Each chain is a walkable path of anchor offsets;
+	 * vertices with no emitter neighbor become single-point chains. Cold
+	 * path, runs only at emitter resolution.
+	 */
+	private static int[][] buildChains(ModelSnapshot snapshot, ModelSnapshot.Piece piece, int[] emitterVertices)
+	{
+		Map<Integer, Integer> offsetOf = new HashMap<>();
+		for (int i = 0; i < emitterVertices.length; i++)
+		{
+			offsetOf.put(emitterVertices[i], i);
+		}
+
+		// Adjacency between emitter vertices sharing a mesh edge
+		List<List<Integer>> adjacency = new ArrayList<>(emitterVertices.length);
+		for (int i = 0; i < emitterVertices.length; i++)
+		{
+			adjacency.add(new ArrayList<>());
+		}
+		Set<Long> seenEdges = new HashSet<>();
+		int[] f1 = snapshot.getFaceIndices1();
+		int[] f2 = snapshot.getFaceIndices2();
+		int[] f3 = snapshot.getFaceIndices3();
+		for (int f : piece.getFaces())
+		{
+			chainEdge(offsetOf, adjacency, seenEdges, f1[f], f2[f]);
+			chainEdge(offsetOf, adjacency, seenEdges, f2[f], f3[f]);
+			chainEdge(offsetOf, adjacency, seenEdges, f1[f], f3[f]);
+		}
+
+		// Walk paths from endpoints and junctions first, then leftover cycles
+		boolean[] visited = new boolean[emitterVertices.length];
+		List<int[]> chains = new ArrayList<>();
+		for (int pass = 0; pass < 2; pass++)
+		{
+			for (int start = 0; start < emitterVertices.length; start++)
+			{
+				if (visited[start] || (pass == 0 && adjacency.get(start).size() == 2))
+				{
+					continue;
+				}
+				List<Integer> path = new ArrayList<>();
+				int current = start;
+				visited[current] = true;
+				path.add(current);
+				boolean extended = true;
+				while (extended)
+				{
+					extended = false;
+					for (int next : adjacency.get(current))
+					{
+						if (!visited[next])
+						{
+							visited[next] = true;
+							path.add(next);
+							current = next;
+							extended = true;
+							break;
+						}
+					}
+				}
+				int[] chain = new int[path.size()];
+				for (int i = 0; i < chain.length; i++)
+				{
+					chain[i] = path.get(i);
+				}
+				chains.add(chain);
+			}
+		}
+		return chains.toArray(new int[0][]);
+	}
+
+	private static void chainEdge(Map<Integer, Integer> offsetOf, List<List<Integer>> adjacency,
+		Set<Long> seenEdges, int globalA, int globalB)
+	{
+		Integer a = offsetOf.get(globalA);
+		Integer b = offsetOf.get(globalB);
+		if (a == null || b == null)
+		{
+			return;
+		}
+		long key = a < b ? ((long) a << 32) | b : ((long) b << 32) | a;
+		if (seenEdges.add(key))
+		{
+			adjacency.get(a).add(b);
+			adjacency.get(b).add(a);
 		}
 	}
 
@@ -594,14 +721,23 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			int count = (int) emitter.carry;
 			emitter.carry -= count;
 
+			boolean feathered = style.isFeather() && emitter.chains != null
+				&& emitter.anchorCount == emitter.vertices.length;
 			for (int i = 0; i < count; i++)
 			{
 				if (particleSystem.getParticles().size() >= budget)
 				{
 					return;
 				}
-				int a = emitter.anchorStart + random.nextInt(emitter.anchorCount);
-				spawnParticle(emitter, a, random.nextFloat());
+				if (feathered)
+				{
+					spawnFeathered(emitter);
+				}
+				else
+				{
+					int a = emitter.anchorStart + random.nextInt(emitter.anchorCount);
+					spawnParticle(emitter, a, random.nextFloat());
+				}
 			}
 
 			// Distance-based emission: spread spawns evenly along each
@@ -640,8 +776,6 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private void spawnParticle(ActiveEmitter emitter, int a, float t)
 	{
-		ParticleStyle style = emitter.style;
-
 		float ax = anchorXs[a];
 		float ay = anchorYs[a];
 		float az = anchorZs[a];
@@ -651,6 +785,59 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			ay = prevAnchorYs[a] + (ay - prevAnchorYs[a]) * t;
 			az = prevAnchorZs[a] + (az - prevAnchorZs[a]) * t;
 		}
+
+		spawnAt(emitter, ax, ay, az);
+	}
+
+	/**
+	 * Spawn along the smoothed line through the emitter's vertex chains:
+	 * a quadratic curve through segment midpoints with the vertex as control
+	 * point, which rounds off jagged hem corners into a soft band.
+	 */
+	private void spawnFeathered(ActiveEmitter emitter)
+	{
+		int k = random.nextInt(emitter.sampleChainOf.length);
+		int[] chain = emitter.chains[emitter.sampleChainOf[k]];
+		int j = emitter.samplePosOf[k];
+		int aA = emitter.anchorStart + chain[Math.max(0, j - 1)];
+		int aB = emitter.anchorStart + chain[j];
+		int aC = emitter.anchorStart + chain[Math.min(chain.length - 1, j + 1)];
+		float t = random.nextFloat();
+
+		float x = quadratic(anchorXs[aA], anchorXs[aB], anchorXs[aC], t);
+		float y = quadratic(anchorYs[aA], anchorYs[aB], anchorYs[aC], t);
+		float z = quadratic(anchorZs[aA], anchorZs[aB], anchorZs[aC], t);
+
+		// Time-lerp along the anchors' movement this tick, like point spawns
+		if (segmentUsable(aA) && segmentUsable(aB) && segmentUsable(aC))
+		{
+			float timeT = random.nextFloat();
+			float px = quadratic(prevAnchorXs[aA], prevAnchorXs[aB], prevAnchorXs[aC], t);
+			float py = quadratic(prevAnchorYs[aA], prevAnchorYs[aB], prevAnchorYs[aC], t);
+			float pz = quadratic(prevAnchorZs[aA], prevAnchorZs[aB], prevAnchorZs[aC], t);
+			x = px + (x - px) * timeT;
+			y = py + (y - py) * timeT;
+			z = pz + (z - pz) * timeT;
+		}
+
+		spawnAt(emitter, x, y, z);
+	}
+
+	/**
+	 * Quadratic Bezier from midpoint(a,b) to midpoint(b,c) with b as control:
+	 * the smoothed-polyline curve.
+	 */
+	private static float quadratic(float a, float b, float c, float t)
+	{
+		float m1 = (a + b) / 2f;
+		float m2 = (b + c) / 2f;
+		float inv = 1f - t;
+		return inv * inv * m1 + 2f * inv * t * b + t * t * m2;
+	}
+
+	private void spawnAt(ActiveEmitter emitter, float ax, float ay, float az)
+	{
+		ParticleStyle style = emitter.style;
 
 		// Spawn within a small volume around the point, not at it exactly
 		float jitter = style.getSpawnJitter();
