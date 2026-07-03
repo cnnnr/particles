@@ -35,8 +35,13 @@ class EmitterProfile
 	 */
 	private Set<Integer> animationIds = new HashSet<>();
 	/**
-	 * Optional frame window within a matched action animation; -1 = unbounded.
-	 * Ignored for pose animation matches.
+	 * Optional frame windows within a matched action animation, e.g.
+	 * "9-13, 15-19" or "7"; blank = all frames. Ignored for pose animation
+	 * matches.
+	 */
+	private String animFrames = "";
+	/**
+	 * Legacy single frame window, migrated into {@link #animFrames} on load.
 	 */
 	private int animFrameStart = -1;
 	private int animFrameEnd = -1;
@@ -117,7 +122,6 @@ class EmitterProfile
 		offsetZ = other.offsetZ;
 		itemIds = new HashSet<>(other.itemIds);
 		animationIds = new HashSet<>(other.animationIds);
-		animFrameStart = other.animFrameStart;
-		animFrameEnd = other.animFrameEnd;
+		animFrames = other.animFrames;
 	}
 }

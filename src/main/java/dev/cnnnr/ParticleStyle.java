@@ -49,8 +49,11 @@ class ParticleStyle
 	private final float offsetY;
 	private final float offsetZ;
 	private final Set<Integer> animationIds;
-	private final int animFrameStart;
-	private final int animFrameEnd;
+	/**
+	 * Flattened [start0, end0, start1, end1, ...] frame windows for action
+	 * animation matches, or null for all frames.
+	 */
+	private final int[] animFrameRanges;
 
 	ParticleStyle(ModelData[][] templates, int[] litColors1, int[] litColors2, int[] litColors3,
 		EmitterProfile profile)
@@ -69,13 +72,55 @@ class ParticleStyle
 		this.offsetY = profile.getOffsetY();
 		this.offsetZ = profile.getOffsetZ();
 		this.animationIds = Set.copyOf(profile.getAnimationIds());
-		this.animFrameStart = profile.getAnimFrameStart();
-		this.animFrameEnd = profile.getAnimFrameEnd();
+		this.animFrameRanges = parseFrameRanges(profile.getAnimFrames());
+	}
+
+	/**
+	 * Parse "9-13, 15-19, 25" into flattened start/end pairs; single numbers
+	 * become one-frame windows, junk tokens are ignored.
+	 *
+	 * @return null when no valid ranges (= all frames pass)
+	 */
+	private static int[] parseFrameRanges(String text)
+	{
+		if (text == null || text.isEmpty())
+		{
+			return null;
+		}
+		java.util.List<Integer> bounds = new java.util.ArrayList<>();
+		for (String token : text.split(","))
+		{
+			try
+			{
+				String[] parts = token.trim().split("-", 2);
+				if (parts[0].isEmpty())
+				{
+					continue;
+				}
+				int start = Integer.parseInt(parts[0].trim());
+				int end = parts.length > 1 ? Integer.parseInt(parts[1].trim()) : start;
+				bounds.add(Math.min(start, end));
+				bounds.add(Math.max(start, end));
+			}
+			catch (NumberFormatException ignored)
+			{
+			}
+		}
+		if (bounds.isEmpty())
+		{
+			return null;
+		}
+		int[] ranges = new int[bounds.size()];
+		for (int i = 0; i < ranges.length; i++)
+		{
+			ranges[i] = bounds.get(i);
+		}
+		return ranges;
 	}
 
 	/**
 	 * Animation gate: emit only while the player's action or pose animation
-	 * matches, with an optional frame window on action matches. An empty gate
+	 * matches, with optional frame windows on action matches. An empty gate
 	 * always passes; live particles are unaffected and fade out naturally.
 	 */
 	boolean animationMatches(int actionAnimation, int actionFrame, int poseAnimation)
@@ -86,8 +131,18 @@ class ParticleStyle
 		}
 		if (animationIds.contains(actionAnimation))
 		{
-			return (animFrameStart < 0 || actionFrame >= animFrameStart)
-				&& (animFrameEnd < 0 || actionFrame <= animFrameEnd);
+			if (animFrameRanges == null)
+			{
+				return true;
+			}
+			for (int i = 0; i < animFrameRanges.length; i += 2)
+			{
+				if (actionFrame >= animFrameRanges[i] && actionFrame <= animFrameRanges[i + 1])
+				{
+					return true;
+				}
+			}
+			return false;
 		}
 		return animationIds.contains(poseAnimation);
 	}

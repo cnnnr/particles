@@ -69,6 +69,20 @@ class EmitterStore
 					{
 						profile.setSignature(key);
 					}
+					// Migration: single frame window fields became a range list
+					if ((profile.getAnimFrames() == null || profile.getAnimFrames().isEmpty())
+						&& (profile.getAnimFrameStart() >= 0 || profile.getAnimFrameEnd() >= 0))
+					{
+						int start = Math.max(0, profile.getAnimFrameStart());
+						int end = profile.getAnimFrameEnd() < 0 ? 999 : profile.getAnimFrameEnd();
+						profile.setAnimFrames(start + "-" + end);
+						profile.setAnimFrameStart(-1);
+						profile.setAnimFrameEnd(-1);
+					}
+					else if (profile.getAnimFrames() == null)
+					{
+						profile.setAnimFrames("");
+					}
 				});
 			}
 		}

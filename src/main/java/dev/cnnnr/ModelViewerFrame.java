@@ -117,8 +117,7 @@ class ModelViewerFrame extends JFrame
 	private final JSpinner offsetZSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
 	private final JTextField itemFilterField = new JTextField();
 	private final JTextField animFilterField = new JTextField();
-	private final JSpinner animFrameStartSpinner = new JSpinner(new SpinnerNumberModel(-1, -1, 999, 1));
-	private final JSpinner animFrameEndSpinner = new JSpinner(new SpinnerNumberModel(-1, -1, 999, 1));
+	private final JTextField animFramesField = new JTextField();
 	private final JComboBox<String> wornItemsCombo = new JComboBox<>();
 	private final JButton addWornItemButton = new JButton("+");
 	private final JButton duplicateButton = new JButton("Duplicate profile");
@@ -228,10 +227,7 @@ class ModelViewerFrame extends JFrame
 		grid.add(new JLabel("Anim filter"));
 		grid.add(animFilterField);
 		grid.add(new JLabel("Anim frames"));
-		JPanel frameRange = new JPanel(new GridLayout(1, 2, 2, 0));
-		frameRange.add(animFrameStartSpinner);
-		frameRange.add(animFrameEndSpinner);
-		grid.add(frameRange);
+		grid.add(animFramesField);
 
 		colorButton.addActionListener(e ->
 		{
@@ -286,10 +282,8 @@ class ModelViewerFrame extends JFrame
 		itemFilterField.setToolTipText("Comma-separated item IDs; only emit while one is worn. Blank = any variant of this mesh.");
 		animFilterField.getDocument().addDocumentListener(saveOnEdit);
 		animFilterField.setToolTipText("Comma-separated animation IDs; only emit while one is playing (action or pose). Blank = always. The overlay stats line shows the last action animation id.");
-		animFrameStartSpinner.addChangeListener(e -> saveStyle());
-		animFrameStartSpinner.setToolTipText("First action-animation frame to emit on; -1 = from the start");
-		animFrameEndSpinner.addChangeListener(e -> saveStyle());
-		animFrameEndSpinner.setToolTipText("Last action-animation frame to emit on; -1 = to the end");
+		animFramesField.getDocument().addDocumentListener(saveOnEdit);
+		animFramesField.setToolTipText("Frame windows within the action animation, e.g. \"9-13, 15-19\" or \"7\". Blank = all frames.");
 
 		addWornItemButton.setToolTipText("Append the selected worn item's ID to the filter");
 		addWornItemButton.addActionListener(e ->
@@ -396,8 +390,7 @@ class ModelViewerFrame extends JFrame
 		offsetZSpinner.setValue(profile.getOffsetZ());
 		itemFilterField.setText(joinIds(profile.getItemIds()));
 		animFilterField.setText(joinIds(profile.getAnimationIds()));
-		animFrameStartSpinner.setValue(profile.getAnimFrameStart());
-		animFrameEndSpinner.setValue(profile.getAnimFrameEnd());
+		animFramesField.setText(profile.getAnimFrames());
 		populating = false;
 
 		editorHint.setText(profile.getName());
@@ -434,8 +427,7 @@ class ModelViewerFrame extends JFrame
 		offsetZSpinner.setEnabled(enabled);
 		itemFilterField.setEnabled(enabled);
 		animFilterField.setEnabled(enabled);
-		animFrameStartSpinner.setEnabled(enabled);
-		animFrameEndSpinner.setEnabled(enabled);
+		animFramesField.setEnabled(enabled);
 		wornItemsCombo.setEnabled(enabled);
 		addWornItemButton.setEnabled(enabled);
 		duplicateButton.setEnabled(enabled);
@@ -470,8 +462,7 @@ class ModelViewerFrame extends JFrame
 		profile.setOffsetZ((int) offsetZSpinner.getValue());
 		profile.setItemIds(parseIds(itemFilterField.getText()));
 		profile.setAnimationIds(parseIds(animFilterField.getText()));
-		profile.setAnimFrameStart((int) animFrameStartSpinner.getValue());
-		profile.setAnimFrameEnd((int) animFrameEndSpinner.getValue());
+		profile.setAnimFrames(animFramesField.getText().trim());
 		callbacks.saveProfile(selectedProfileKey, profile);
 	}
 
