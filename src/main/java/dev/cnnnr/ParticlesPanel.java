@@ -319,9 +319,13 @@ class ParticlesPanel extends PluginPanel
 			+ (profile.isGraphicTarget() ? " [gfx " + profile.getGraphicId() + "]" : "");
 
 		JCheckBox toggle = new JCheckBox(text, profile.isEnabled());
-		toggle.setToolTipText(worn
-			? "This profile's piece is part of the model you are wearing now"
-			: "This profile's piece is not on your current model");
+		// Rows truncate in the narrow sidebar; the tooltip carries the full
+		// name and tag, plus the worn state where that concept applies
+		toggle.setToolTipText(EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType())
+			? "<html>" + text + "<br>" + (worn
+				? "On the model you are wearing now"
+				: "Not on your current model") + "</html>"
+			: text);
 		toggle.addActionListener(e -> onToggleProfile.accept(profileKey, toggle.isSelected()));
 
 		JPanel row = new JPanel(new BorderLayout());
