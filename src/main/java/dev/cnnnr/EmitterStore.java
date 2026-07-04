@@ -2,7 +2,10 @@ package dev.cnnnr;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -50,6 +53,14 @@ class EmitterStore
 	synchronized void load()
 	{
 		String json = configManager.getConfiguration(ParticlesConfig.GROUP, CONFIG_KEY);
+		if (json == null || json.isEmpty())
+		{
+			// Fresh install: seed from the bundled preset pack. Deliberately
+			// not saved back - the config stays empty until the user changes
+			// something, so plugin updates keep delivering preset updates
+			// until they do.
+			json = loadBundledPresets();
+		}
 		if (json == null || json.isEmpty())
 		{
 			return;
@@ -100,6 +111,24 @@ class EmitterStore
 		catch (Exception e)
 		{
 			log.warn("Failed to load emitter profiles", e);
+		}
+	}
+
+	@Nullable
+	private static String loadBundledPresets()
+	{
+		try (InputStream in = EmitterStore.class.getResourceAsStream("/presets.json"))
+		{
+			if (in == null)
+			{
+				return null;
+			}
+			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+		}
+		catch (IOException e)
+		{
+			log.warn("Failed to read bundled presets", e);
+			return null;
 		}
 	}
 

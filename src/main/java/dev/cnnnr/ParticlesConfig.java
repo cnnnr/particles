@@ -23,10 +23,10 @@ public interface ParticlesConfig extends Config
 	)
 	default boolean showAnchor()
 	{
-		return true;
+		return false;
 	}
 
-	@Range(min = 50, max = 8000)
+	@Range(min = 50, max = 8192)
 	@ConfigItem(
 		position = 1,
 		keyName = "maxParticles",
@@ -35,6 +35,6 @@ public interface ParticlesConfig extends Config
 	)
 	default int maxParticles()
 	{
-		return 1500;
+		return 4096;
 	}
 }
