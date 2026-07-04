@@ -438,14 +438,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (localPlayer.getInteracting() instanceof Player)
 		{
 			Player target = (Player) localPlayer.getInteracting();
-			if (isCentered(target))
+			if (target.getWorldLocation().getPlane() == level && isCentered(target))
 			{
 				tileOwners.putIfAbsent(tileKey(target), target);
 			}
 		}
 		for (NPC npc : client.getTopLevelWorldView().npcs())
 		{
-			if (npc == null)
+			if (npc == null || npc.getWorldLocation().getPlane() != level)
 			{
 				continue;
 			}
@@ -474,7 +474,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			PlayerEmitters pe = playerEmitters.computeIfAbsent(player, p -> new PlayerEmitters());
 			pe.stamp = playerStamp;
 
-			if (!isCentered(player))
+			if (player.getWorldLocation().getPlane() != level || !isCentered(player))
 			{
 				continue;
 			}
@@ -485,7 +485,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 		}
 
-		// Every drawn player in the scene emits, not just the local one
+		// Every drawn player in the scene emits, not just the local one.
+		// players() spans all four planes of the scene, but the client only
+		// draws the current one - other planes must not emit at all.
 		for (Player player : client.getTopLevelWorldView().players())
 		{
 			if (player == null)
@@ -497,8 +499,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				continue;
 			}
-			boolean drawn = drawsUnconditionally(player)
-				|| tileOwners.get(tileKey(player)) == player;
+			boolean drawn = player.getWorldLocation().getPlane() == level
+				&& (drawsUnconditionally(player) || tileOwners.get(tileKey(player)) == player);
 			if (!drawn)
 			{
 				// Hidden under a stack: stop emitting and break trail
