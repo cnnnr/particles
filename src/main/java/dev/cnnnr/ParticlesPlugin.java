@@ -180,19 +180,25 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		boolean rebuilt;
 		int stamp;
 		/**
-		 * Order this player entered our view; used to pick the visible player
-		 * of a stacked tile.
+		 * Position in our mirror of the engine's player processing list; the
+		 * engine draws only the first-processed player of a stacked tile, so
+		 * the lowest slot is the visible model.
 		 */
-		int arrivalSeq;
+		int drawSlot;
 		/**
-		 * The player's engine index, the other stacked-owner signal.
+		 * The player's engine index, an alternative stacked-owner signal.
 		 */
 		int playerId;
 	}
 
 	private final Map<Player, PlayerEmitters> playerEmitters = new HashMap<>();
 	private int playerStamp;
-	private int arrivalCounter;
+	/**
+	 * Mirror of the engine's player processing list: append on entering view,
+	 * swap-remove on leaving - the same mutation pattern the engine uses, so
+	 * slots track its draw order through churn.
+	 */
+	private final List<Player> playerOrder = new ArrayList<>();
 	/**
 	 * One emitting player per occupied tile: stacked players render as a
 	 * single visible model, so hidden players' particles would float around
@@ -308,6 +314,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	{
 		lastNanos = System.nanoTime();
 		stylesRevision = -1;
+		playerEmitters.clear();
+		playerOrder.clear();
 		renderer = new ParticleRenderer(client);
 		store = new EmitterStore(configManager, gson);
 		store.load();
@@ -371,8 +379,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			case LOGGED_IN:
 				// Player models are rebuilt on scene load and their vertex
 				// indices can change; re-resolve emitters against the new
-				// models or emission goes subtly wrong until gear is re-equipped
-				playerEmitters.clear();
+				// models or emission goes subtly wrong until gear is re-equipped.
+				// Invalidate only - the draw-order mirror must survive, since
+				// these players never left the engine's processing list.
+				invalidateResolutions();
 				break;
 			default:
 				break;
@@ -394,7 +404,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			stylesRevision = store.getRevision();
 			// Emitters hold style references; re-resolve everyone
-			playerEmitters.clear();
+			invalidateResolutions();
 		}
 
 		Player localPlayer = client.getLocalPlayer();
@@ -402,6 +412,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			anchorCount = 0;
 			playerEmitters.clear();
+			playerOrder.clear();
 			particleSystem.clear(DISCARD);
 			renderer.reset();
 			lastLevel = -1;
@@ -439,12 +450,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				continue;
 			}
-			PlayerEmitters pe = playerEmitters.computeIfAbsent(player, p ->
+			PlayerEmitters pe = playerEmitters.get(player);
+			if (pe == null)
 			{
-				PlayerEmitters created = new PlayerEmitters();
-				created.arrivalSeq = ++arrivalCounter;
-				return created;
-			});
+				pe = new PlayerEmitters();
+				pe.drawSlot = playerOrder.size();
+				playerOrder.add(player);
+				playerEmitters.put(player, pe);
+			}
 			pe.stamp = playerStamp;
 			pe.playerId = player.getId();
 
@@ -499,11 +512,16 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			updateAnchors(pe, player, markers);
 			emit(dt, pe, player);
 		}
-		Iterator<PlayerEmitters> peIt = playerEmitters.values().iterator();
+		// Sweep departed players with the engine's own removal semantics:
+		// swap-remove, which shifts the last-processed player into the freed
+		// slot and is exactly what reorders stacked draw priority on churn
+		Iterator<Map.Entry<Player, PlayerEmitters>> peIt = playerEmitters.entrySet().iterator();
 		while (peIt.hasNext())
 		{
-			if (peIt.next().stamp != playerStamp)
+			Map.Entry<Player, PlayerEmitters> entry = peIt.next();
+			if (entry.getValue().stamp != playerStamp)
 			{
+				swapRemoveFromOrder(entry.getValue());
 				peIt.remove();
 			}
 		}
@@ -1001,6 +1019,37 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	}
 
 	/**
+	 * Force re-resolution for everyone without touching the draw-order
+	 * mirror, e.g. when styles rebuild or models are recreated on scene load.
+	 */
+	private void invalidateResolutions()
+	{
+		for (PlayerEmitters pe : playerEmitters.values())
+		{
+			pe.equipmentIds = null;
+		}
+	}
+
+	private void swapRemoveFromOrder(PlayerEmitters pe)
+	{
+		int slot = pe.drawSlot;
+		int last = playerOrder.size() - 1;
+		if (slot < 0 || slot > last)
+		{
+			return;
+		}
+		Player moved = playerOrder.get(last);
+		playerOrder.set(slot, moved);
+		playerOrder.remove(last);
+		PlayerEmitters movedPe = playerEmitters.get(moved);
+		if (movedPe != null)
+		{
+			movedPe.drawSlot = slot;
+		}
+		pe.drawSlot = -1;
+	}
+
+	/**
 	 * Stacked-tile election: does candidate a beat current owner b?
 	 */
 	private static boolean ownerBeats(PlayerEmitters a, PlayerEmitters b,
@@ -1008,10 +1057,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	{
 		switch (rule)
 		{
-			case EARLIEST_ARRIVAL:
-				return a.arrivalSeq < b.arrivalSeq;
-			case LATEST_ARRIVAL:
-				return a.arrivalSeq > b.arrivalSeq;
+			case FIRST_IN_DRAW_ORDER:
+				return a.drawSlot < b.drawSlot;
+			case LAST_IN_DRAW_ORDER:
+				return a.drawSlot > b.drawSlot;
 			case LOWEST_INDEX:
 				return a.playerId < b.playerId;
 			case HIGHEST_INDEX:

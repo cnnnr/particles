@@ -22,8 +22,8 @@ public interface ParticlesConfig extends Config
 	 */
 	enum StackOwnerRule
 	{
-		EARLIEST_ARRIVAL,
-		LATEST_ARRIVAL,
+		FIRST_IN_DRAW_ORDER,
+		LAST_IN_DRAW_ORDER,
 		LOWEST_INDEX,
 		HIGHEST_INDEX,
 		SUPPRESS
@@ -37,7 +37,7 @@ public interface ParticlesConfig extends Config
 	)
 	default StackOwnerRule stackOwnerRule()
 	{
-		return StackOwnerRule.EARLIEST_ARRIVAL;
+		return StackOwnerRule.FIRST_IN_DRAW_ORDER;
 	}
 
 	@ConfigItem(
