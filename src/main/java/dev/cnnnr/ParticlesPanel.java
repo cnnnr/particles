@@ -151,12 +151,6 @@ class ParticlesPanel extends PluginPanel
 
 		JPanel north = new JPanel(new BorderLayout(0, 8));
 		north.add(controls, BorderLayout.NORTH);
-		if (developerMode)
-		{
-			north.add(new JLabel("<html>Pick a mesh piece in the vertex picker, then click "
-				+ "vertices to toggle particle emission from them.</html>"), BorderLayout.CENTER);
-		}
-
 		add(north, BorderLayout.NORTH);
 		add(profileList, BorderLayout.CENTER);
 	}

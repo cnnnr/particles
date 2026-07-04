@@ -149,37 +149,55 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	private ParticlesPanel panel;
 	private ModelViewerFrame viewerFrame;
 
-	// Anchor state, updated once per client tick and read by the overlay.
-	// Both run on the client thread, so no synchronization is needed.
+	/**
+	 * Per-player emitter state: resolution cache against that player's gear,
+	 * transformed anchors, and trail history. Every player in the scene gets
+	 * particles, not just the local one. Client thread.
+	 */
+	private static class PlayerEmitters
+	{
+		final List<ActiveEmitter> emitters = new ArrayList<>();
+		int[] equipmentIds;
+		int revision = -1;
+		float[] anchorXs = new float[0];
+		float[] anchorYs = new float[0];
+		/**
+		 * Absolute scene z (negative up), based on the same base height the
+		 * engine renders the model at, so anchors stay glued on slopes.
+		 */
+		float[] anchorZs = new float[0];
+		// Last tick's anchors: spawns spread along each anchor's movement
+		// segment so fast-moving emitters lay a smooth trail, not clumps
+		float[] prevXs = new float[0];
+		float[] prevYs = new float[0];
+		float[] prevZs = new float[0];
+		/**
+		 * Fractional carry of distance-based emission per anchor slot.
+		 */
+		float[] trailCarry = new float[0];
+		int anchorCount;
+		int prevCount;
+		boolean rebuilt;
+		int stamp;
+	}
+
+	private final Map<Player, PlayerEmitters> playerEmitters = new HashMap<>();
+	private int playerStamp;
+
+	// Debug marker aggregate across all players, read by the overlay; only
+	// filled while markers are shown. Client thread.
 	@Getter
 	private int anchorCount;
 	@Getter
 	private float[] anchorXs = new float[0];
 	@Getter
 	private float[] anchorYs = new float[0];
-	/**
-	 * Absolute scene z per anchor (negative up), based on the same base height
-	 * the engine renders the model at, so anchors stay glued on slopes.
-	 */
 	@Getter
 	private float[] anchorZs = new float[0];
 	@Getter
 	private int anchorWorldView = -1;
 	@Getter
 	private int anchorLevel;
-
-	// Last tick's anchor positions: spawns are spread along each anchor's
-	// movement segment so fast-moving emitters (weapon swings) lay a smooth
-	// trail instead of one clump per tick
-	private float[] prevAnchorXs = new float[0];
-	private float[] prevAnchorYs = new float[0];
-	private float[] prevAnchorZs = new float[0];
-	private int prevAnchorCount;
-	private boolean anchorsRebuilt;
-	/**
-	 * Fractional carry of distance-based emission per anchor slot.
-	 */
-	private float[] trailCarry = new float[0];
 	/**
 	 * Smoothed feather paths for the debug overlay, one flat [x,y,z, ...] per
 	 * chain. Rebuilt per tick only while markers are shown.
@@ -231,9 +249,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		final Map<ParticleStyle, double[]> carries = new HashMap<>();
 	}
 
-	// Emitter resolution cache: rebuilt only when gear or profiles change.
-	// Client thread.
-	private final List<ActiveEmitter> activeEmitters = new ArrayList<>();
+	// Projectile emission state; profile list is gear-gated by the local
+	// player and rebuilt with their resolution. Client thread.
 	private final List<ActiveProjectileProfile> activeProjectileProfiles = new ArrayList<>();
 	private final Map<Projectile, ProjectileTracker> projectileTrackers = new HashMap<>();
 	private int projectileStamp;
@@ -242,8 +259,6 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * capture list. Client thread.
 	 */
 	private final LinkedHashMap<Integer, long[]> recentProjectiles = new LinkedHashMap<>();
-	private int[] resolvedEquipmentIds;
-	private int resolvedRevision = -1;
 	private int stylesRevision = -1;
 
 	// Reused consumers; a method reference expression allocates per evaluation
@@ -272,8 +287,6 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	protected void startUp() throws Exception
 	{
 		lastNanos = System.nanoTime();
-		resolvedEquipmentIds = null;
-		resolvedRevision = -1;
 		stylesRevision = -1;
 		renderer = new ParticleRenderer(client);
 		store = new EmitterStore(configManager, gson);
@@ -336,10 +349,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				renderer.reset();
 				break;
 			case LOGGED_IN:
-				// The player model is rebuilt on scene load and its vertex
+				// Player models are rebuilt on scene load and their vertex
 				// indices can change; re-resolve emitters against the new
-				// model or emission goes subtly wrong until gear is re-equipped
-				resolvedEquipmentIds = null;
+				// models or emission goes subtly wrong until gear is re-equipped
+				playerEmitters.clear();
 				break;
 			default:
 				break;
@@ -360,32 +373,60 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (stylesRevision != store.getRevision() && renderer.rebuildStyles(store.snapshotAll()))
 		{
 			stylesRevision = store.getRevision();
-			resolvedEquipmentIds = null;
+			// Emitters hold style references; re-resolve everyone
+			playerEmitters.clear();
 		}
 
-		Player player = client.getLocalPlayer();
-		if (player == null)
+		Player localPlayer = client.getLocalPlayer();
+		if (localPlayer == null)
 		{
 			anchorCount = 0;
+			playerEmitters.clear();
 			particleSystem.clear(DISCARD);
 			renderer.reset();
 			lastLevel = -1;
 			return;
 		}
 
-		// Drop all particles when the player changes floor; their positions
+		// Drop all particles when the scene plane changes; their positions
 		// are only meaningful on the level they spawned on
-		int level = player.getWorldView().getPlane();
+		int level = localPlayer.getWorldView().getPlane();
 		if (level != lastLevel)
 		{
 			particleSystem.clear(DISCARD);
 			lastLevel = level;
 		}
-		anchorWorldView = player.getLocalLocation().getWorldView();
+		anchorWorldView = localPlayer.getLocalLocation().getWorldView();
 		anchorLevel = level;
 
-		updateAnchors(player);
-		emit(dt, player);
+		// Debug aggregates rebuilt during the player loop
+		boolean markers = config.showAnchor();
+		anchorCount = 0;
+		featherDebugPaths.clear();
+
+		// Every player in the scene emits, not just the local one
+		playerStamp++;
+		for (Player player : client.getTopLevelWorldView().players())
+		{
+			if (player == null)
+			{
+				continue;
+			}
+			PlayerEmitters pe = playerEmitters.computeIfAbsent(player, p -> new PlayerEmitters());
+			pe.stamp = playerStamp;
+			resolvePlayer(pe, player);
+			updateAnchors(pe, player, markers);
+			emit(dt, pe, player);
+		}
+		Iterator<PlayerEmitters> peIt = playerEmitters.values().iterator();
+		while (peIt.hasNext())
+		{
+			if (peIt.next().stamp != playerStamp)
+			{
+				peIt.remove();
+			}
+		}
+
 		emitProjectiles(dt);
 		particleSystem.update(dt, deathStats);
 		renderer.sync(particleSystem.getParticles(), anchorWorldView, anchorLevel);
@@ -415,47 +456,44 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			+ " | deaths/s " + windowDeaths
 			+ " | avg death age " + (avgDeathAgePct < 0 ? "-" : avgDeathAgePct + "%")
 			+ " | oob kills " + renderer.drainOutOfSceneKills()
-			+ " | last anim " + lastActionAnimation
-			+ " | " + renderer.getCameraDebug();
+			+ " | last anim " + lastActionAnimation;
 		windowSpawns = 0;
 		windowDeaths = 0;
 		windowDeathAgeSum = 0;
 	}
 
 	/**
-	 * Transform every active emitter's vertices from the player's posed model
+	 * Transform a player's active emitter vertices from their posed model
 	 * into world (local scene) coordinates.
 	 */
-	private void updateAnchors(Player player)
+	private void updateAnchors(PlayerEmitters pe, Player player, boolean markers)
 	{
 		// Keep last tick's anchors for movement-segment interpolation
-		prevAnchorCount = anchorCount;
-		if (anchorCount > 0)
+		pe.prevCount = pe.anchorCount;
+		if (pe.anchorCount > 0)
 		{
-			if (prevAnchorXs.length < anchorXs.length)
+			if (pe.prevXs.length < pe.anchorXs.length)
 			{
-				prevAnchorXs = new float[anchorXs.length];
-				prevAnchorYs = new float[anchorXs.length];
-				prevAnchorZs = new float[anchorXs.length];
+				pe.prevXs = new float[pe.anchorXs.length];
+				pe.prevYs = new float[pe.anchorXs.length];
+				pe.prevZs = new float[pe.anchorXs.length];
 			}
-			System.arraycopy(anchorXs, 0, prevAnchorXs, 0, anchorCount);
-			System.arraycopy(anchorYs, 0, prevAnchorYs, 0, anchorCount);
-			System.arraycopy(anchorZs, 0, prevAnchorZs, 0, anchorCount);
+			System.arraycopy(pe.anchorXs, 0, pe.prevXs, 0, pe.anchorCount);
+			System.arraycopy(pe.anchorYs, 0, pe.prevYs, 0, pe.anchorCount);
+			System.arraycopy(pe.anchorZs, 0, pe.prevZs, 0, pe.anchorCount);
 		}
-		anchorCount = 0;
+		pe.anchorCount = 0;
+
+		if (pe.emitters.isEmpty())
+		{
+			return;
+		}
 
 		Model model = player.getModel();
 		if (model == null)
 		{
 			return;
 		}
-
-		resolveEmitters(player, model);
-		if (activeEmitters.isEmpty())
-		{
-			return;
-		}
-
 		int vertexCount = model.getVerticesCount();
 		if (vertexCount == 0)
 		{
@@ -463,15 +501,15 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		}
 
 		int totalVertices = 0;
-		for (ActiveEmitter emitter : activeEmitters)
+		for (ActiveEmitter emitter : pe.emitters)
 		{
 			totalVertices += emitter.vertices.length;
 		}
-		if (anchorXs.length < totalVertices)
+		if (pe.anchorXs.length < totalVertices)
 		{
-			anchorXs = new float[totalVertices];
-			anchorYs = new float[totalVertices];
-			anchorZs = new float[totalVertices];
+			pe.anchorXs = new float[totalVertices];
+			pe.anchorYs = new float[totalVertices];
+			pe.anchorZs = new float[totalVertices];
 		}
 
 		// Rotate model space into the world by the player's current facing
@@ -486,9 +524,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		int playerBaseZ = Perspective.getFootprintTileHeight(client, lp, anchorLevel, player.getFootprintSize())
 			- player.getAnimationHeightOffset();
 
-		for (ActiveEmitter emitter : activeEmitters)
+		for (ActiveEmitter emitter : pe.emitters)
 		{
-			emitter.anchorStart = anchorCount;
+			emitter.anchorStart = pe.anchorCount;
 			emitter.anchorCount = 0;
 			// Style offset in model space, so it rotates with the player
 			ParticleStyle style = emitter.style;
@@ -502,54 +540,72 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				float vy = model.getVerticesY()[v] - style.getOffsetZ();
 				float vz = model.getVerticesZ()[v] + style.getOffsetY();
 
-				anchorXs[anchorCount] = lp.getX() + (vz * sin + vx * cos) / 65536f;
-				anchorYs[anchorCount] = lp.getY() + (vz * cos - vx * sin) / 65536f;
+				pe.anchorXs[pe.anchorCount] = lp.getX() + (vz * sin + vx * cos) / 65536f;
+				pe.anchorYs[pe.anchorCount] = lp.getY() + (vz * cos - vx * sin) / 65536f;
 				// Model y is already in the engine's negative-up convention
-				anchorZs[anchorCount] = playerBaseZ + vy;
-				anchorCount++;
+				pe.anchorZs[pe.anchorCount] = playerBaseZ + vy;
+				pe.anchorCount++;
 				emitter.anchorCount++;
 			}
 		}
 
-		if (trailCarry.length < anchorXs.length)
+		if (pe.trailCarry.length < pe.anchorXs.length)
 		{
-			trailCarry = new float[anchorXs.length];
+			pe.trailCarry = new float[pe.anchorXs.length];
 		}
 		// Anchor slots only correspond across ticks while the layout is stable
-		if (anchorsRebuilt || prevAnchorCount != anchorCount)
+		if (pe.rebuilt || pe.prevCount != pe.anchorCount)
 		{
-			prevAnchorCount = 0;
-			Arrays.fill(trailCarry, 0, trailCarry.length, 0f);
+			pe.prevCount = 0;
+			Arrays.fill(pe.trailCarry, 0, pe.trailCarry.length, 0f);
 		}
-		anchorsRebuilt = false;
+		pe.rebuilt = false;
 
-		// Show the feathered emission line while markers are on, so feather
-		// strength can be tuned visually
-		featherDebugPaths.clear();
-		if (config.showAnchor())
+		if (markers)
 		{
-			for (ActiveEmitter emitter : activeEmitters)
+			appendDebugMarkers(pe);
+		}
+	}
+
+	/**
+	 * Aggregate this player's anchors and feathered emission lines into the
+	 * overlay's debug arrays, for tuning.
+	 */
+	private void appendDebugMarkers(PlayerEmitters pe)
+	{
+		int needed = anchorCount + pe.anchorCount;
+		if (anchorXs.length < needed)
+		{
+			anchorXs = Arrays.copyOf(anchorXs, Math.max(needed, anchorXs.length * 2 + 16));
+			anchorYs = Arrays.copyOf(anchorYs, anchorXs.length);
+			anchorZs = Arrays.copyOf(anchorZs, anchorXs.length);
+		}
+		System.arraycopy(pe.anchorXs, 0, anchorXs, anchorCount, pe.anchorCount);
+		System.arraycopy(pe.anchorYs, 0, anchorYs, anchorCount, pe.anchorCount);
+		System.arraycopy(pe.anchorZs, 0, anchorZs, anchorCount, pe.anchorCount);
+		anchorCount += pe.anchorCount;
+
+		for (ActiveEmitter emitter : pe.emitters)
+		{
+			int w = emitter.style.getFeatherStrength();
+			if (w <= 0 || emitter.chains == null || emitter.anchorCount != emitter.vertices.length)
 			{
-				int w = emitter.style.getFeatherStrength();
-				if (w <= 0 || emitter.chains == null || emitter.anchorCount != emitter.vertices.length)
+				continue;
+			}
+			for (int[] chain : emitter.chains)
+			{
+				if (chain.length < 2)
 				{
 					continue;
 				}
-				for (int[] chain : emitter.chains)
+				float[] points = new float[chain.length * 3];
+				for (int j = 0; j < chain.length; j++)
 				{
-					if (chain.length < 2)
-					{
-						continue;
-					}
-					float[] points = new float[chain.length * 3];
-					for (int j = 0; j < chain.length; j++)
-					{
-						points[j * 3] = smoothed(anchorXs, emitter, chain, j, w);
-						points[j * 3 + 1] = smoothed(anchorYs, emitter, chain, j, w);
-						points[j * 3 + 2] = smoothed(anchorZs, emitter, chain, j, w);
-					}
-					featherDebugPaths.add(points);
+					points[j * 3] = smoothed(pe.anchorXs, emitter, chain, j, w);
+					points[j * 3 + 1] = smoothed(pe.anchorYs, emitter, chain, j, w);
+					points[j * 3 + 2] = smoothed(pe.anchorZs, emitter, chain, j, w);
 				}
+				featherDebugPaths.add(points);
 			}
 		}
 	}
@@ -558,57 +614,65 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * @return whether an anchor's movement since last tick is usable as an
 	 * emission segment (layout stable and not a teleport-sized jump)
 	 */
-	private boolean segmentUsable(int a)
+	private static boolean segmentUsable(PlayerEmitters pe, int a)
 	{
-		if (prevAnchorCount != anchorCount)
+		if (pe.prevCount != pe.anchorCount)
 		{
 			return false;
 		}
-		float dx = anchorXs[a] - prevAnchorXs[a];
-		float dy = anchorYs[a] - prevAnchorYs[a];
-		float dz = anchorZs[a] - prevAnchorZs[a];
+		float dx = pe.anchorXs[a] - pe.prevXs[a];
+		float dy = pe.anchorYs[a] - pe.prevYs[a];
+		float dz = pe.anchorZs[a] - pe.prevZs[a];
 		return dx * dx + dy * dy + dz * dz <= MAX_TRAIL_SEGMENT * MAX_TRAIL_SEGMENT;
 	}
 
-	private float segmentLength(int a)
+	private static float segmentLength(PlayerEmitters pe, int a)
 	{
-		float dx = anchorXs[a] - prevAnchorXs[a];
-		float dy = anchorYs[a] - prevAnchorYs[a];
-		float dz = anchorZs[a] - prevAnchorZs[a];
+		float dx = pe.anchorXs[a] - pe.prevXs[a];
+		float dy = pe.anchorYs[a] - pe.prevYs[a];
+		float dz = pe.anchorZs[a] - pe.prevZs[a];
 		return (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
 	}
 
 	/**
-	 * Map stored piece-local emitters onto the current composite model,
-	 * honoring each profile's worn item filter. Cached: re-runs only when
-	 * equipment or the profile store changes.
+	 * Map stored piece-local emitters onto one player's composite model,
+	 * honoring each profile's worn item filter against that player's gear.
+	 * Cached: re-runs only when their equipment or the profile store changes.
 	 */
-	private void resolveEmitters(Player player, Model model)
+	private void resolvePlayer(PlayerEmitters pe, Player player)
 	{
 		PlayerComposition composition = player.getPlayerComposition();
 		if (composition == null)
 		{
-			activeEmitters.clear();
-			resolvedEquipmentIds = null;
+			pe.emitters.clear();
+			pe.equipmentIds = null;
 			return;
 		}
 
 		// Compare gear directly; building a key string every tick is garbage
 		int[] equipmentIds = composition.getEquipmentIds();
 		int revision = store.getRevision();
-		if (Arrays.equals(equipmentIds, resolvedEquipmentIds) && revision == resolvedRevision)
+		if (Arrays.equals(equipmentIds, pe.equipmentIds) && revision == pe.revision)
 		{
 			return;
 		}
-		resolvedEquipmentIds = equipmentIds.clone();
-		resolvedRevision = revision;
-		anchorsRebuilt = true;
+
+		Model model = player.getModel();
+		if (model == null)
+		{
+			pe.emitters.clear();
+			pe.equipmentIds = null;
+			return;
+		}
+		pe.equipmentIds = equipmentIds.clone();
+		pe.revision = revision;
+		pe.rebuilt = true;
 
 		Set<Integer> wornItemIds = wornItemIds(composition);
 		Map<String, EmitterProfile> profiles = store.snapshotAll();
 		ModelSnapshot snapshot = ModelSnapshot.capture(model);
 
-		activeEmitters.clear();
+		pe.emitters.clear();
 		Set<String> present = new HashSet<>();
 		for (ModelSnapshot.Piece piece : snapshot.getPieces())
 		{
@@ -654,11 +718,17 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				int[][] chains = style.getFeatherStrength() > 0
 					? buildChains(snapshot, piece, vertices)
 					: null;
-				activeEmitters.add(new ActiveEmitter(style, vertices, chains));
+				pe.emitters.add(new ActiveEmitter(style, vertices, chains));
 			}
 		}
 
-		// Projectile-targeted profiles, gear-gated like player pieces
+		if (player != client.getLocalPlayer())
+		{
+			return;
+		}
+
+		// Local-player extras: the sidebar's worn indicator, and projectile
+		// profiles gear-gated by the local player's equipment
 		activeProjectileProfiles.clear();
 		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
 		{
@@ -862,25 +932,28 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		return ids;
 	}
 
-	private void emit(float dt, Player player)
+	private void emit(float dt, PlayerEmitters pe, Player player)
 	{
-		if (anchorCount == 0)
+		if (pe.anchorCount == 0)
 		{
-			for (ActiveEmitter emitter : activeEmitters)
+			for (ActiveEmitter emitter : pe.emitters)
 			{
 				emitter.carry = 0;
 			}
 			return;
 		}
 
-		// Animation gate inputs, shared by all emitters this tick
+		// Animation gate inputs from THIS player, shared by their emitters
 		int actionAnimation = player.getAnimation();
 		int actionFrame = player.getAnimationFrame();
 		int poseAnimation = player.getPoseAnimation();
-		lastActionAnimation = actionAnimation != -1 ? actionAnimation : lastActionAnimation;
+		if (player == client.getLocalPlayer())
+		{
+			lastActionAnimation = actionAnimation != -1 ? actionAnimation : lastActionAnimation;
+		}
 
 		int budget = config.maxParticles();
-		for (ActiveEmitter emitter : activeEmitters)
+		for (ActiveEmitter emitter : pe.emitters)
 		{
 			if (emitter.anchorCount == 0)
 			{
@@ -913,12 +986,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				}
 				if (feathered)
 				{
-					spawnFeathered(emitter);
+					spawnFeathered(pe, emitter);
 				}
 				else
 				{
 					int a = emitter.anchorStart + random.nextInt(emitter.anchorCount);
-					spawnParticle(emitter, a, random.nextFloat());
+					spawnParticle(pe, emitter, a, random.nextFloat());
 				}
 			}
 
@@ -931,14 +1004,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 			for (int a = emitter.anchorStart; a < emitter.anchorStart + emitter.anchorCount; a++)
 			{
-				if (!segmentUsable(a))
+				if (!segmentUsable(pe, a))
 				{
-					trailCarry[a] = 0;
+					pe.trailCarry[a] = 0;
 					continue;
 				}
-				float owed = trailCarry[a] + segmentLength(a) / 128f * density;
+				float owed = pe.trailCarry[a] + segmentLength(pe, a) / 128f * density;
 				int n = (int) owed;
-				trailCarry[a] = owed - n;
+				pe.trailCarry[a] = owed - n;
 				for (int i = 0; i < n; i++)
 				{
 					if (particleSystem.getParticles().size() >= budget)
@@ -946,7 +1019,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 						return;
 					}
 					// Stratified positions along the segment: an even ribbon
-					spawnParticle(emitter, a, (i + random.nextFloat()) / n);
+					spawnParticle(pe, emitter, a, (i + random.nextFloat()) / n);
 				}
 			}
 		}
@@ -956,16 +1029,16 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * Spawn one particle at fraction t along the anchor's movement segment
 	 * since last tick (falling back to its current position), plus jitter.
 	 */
-	private void spawnParticle(ActiveEmitter emitter, int a, float t)
+	private void spawnParticle(PlayerEmitters pe, ActiveEmitter emitter, int a, float t)
 	{
-		float ax = anchorXs[a];
-		float ay = anchorYs[a];
-		float az = anchorZs[a];
-		if (segmentUsable(a))
+		float ax = pe.anchorXs[a];
+		float ay = pe.anchorYs[a];
+		float az = pe.anchorZs[a];
+		if (segmentUsable(pe, a))
 		{
-			ax = prevAnchorXs[a] + (ax - prevAnchorXs[a]) * t;
-			ay = prevAnchorYs[a] + (ay - prevAnchorYs[a]) * t;
-			az = prevAnchorZs[a] + (az - prevAnchorZs[a]) * t;
+			ax = pe.prevXs[a] + (ax - pe.prevXs[a]) * t;
+			ay = pe.prevYs[a] + (ay - pe.prevYs[a]) * t;
+			az = pe.prevZs[a] + (az - pe.prevZs[a]) * t;
 		}
 
 		spawnAt(emitter.style, ax, ay, az);
@@ -976,7 +1049,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * a quadratic curve through segment midpoints with the vertex as control
 	 * point, which rounds off jagged hem corners into a soft band.
 	 */
-	private void spawnFeathered(ActiveEmitter emitter)
+	private void spawnFeathered(PlayerEmitters pe, ActiveEmitter emitter)
 	{
 		int k = random.nextInt(emitter.sampleChainOf.length);
 		int[] chain = emitter.chains[emitter.sampleChainOf[k]];
@@ -986,29 +1059,29 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		int jC = Math.min(chain.length - 1, j + 1);
 		float t = random.nextFloat();
 
-		float x = quadratic(smoothed(anchorXs, emitter, chain, jA, w),
-			smoothed(anchorXs, emitter, chain, j, w),
-			smoothed(anchorXs, emitter, chain, jC, w), t);
-		float y = quadratic(smoothed(anchorYs, emitter, chain, jA, w),
-			smoothed(anchorYs, emitter, chain, j, w),
-			smoothed(anchorYs, emitter, chain, jC, w), t);
-		float z = quadratic(smoothed(anchorZs, emitter, chain, jA, w),
-			smoothed(anchorZs, emitter, chain, j, w),
-			smoothed(anchorZs, emitter, chain, jC, w), t);
+		float x = quadratic(smoothed(pe.anchorXs, emitter, chain, jA, w),
+			smoothed(pe.anchorXs, emitter, chain, j, w),
+			smoothed(pe.anchorXs, emitter, chain, jC, w), t);
+		float y = quadratic(smoothed(pe.anchorYs, emitter, chain, jA, w),
+			smoothed(pe.anchorYs, emitter, chain, j, w),
+			smoothed(pe.anchorYs, emitter, chain, jC, w), t);
+		float z = quadratic(smoothed(pe.anchorZs, emitter, chain, jA, w),
+			smoothed(pe.anchorZs, emitter, chain, j, w),
+			smoothed(pe.anchorZs, emitter, chain, jC, w), t);
 
 		// Time-lerp along the anchors' movement this tick, like point spawns
-		if (segmentUsable(emitter.anchorStart + chain[j]))
+		if (segmentUsable(pe, emitter.anchorStart + chain[j]))
 		{
 			float timeT = random.nextFloat();
-			float px = quadratic(smoothed(prevAnchorXs, emitter, chain, jA, w),
-				smoothed(prevAnchorXs, emitter, chain, j, w),
-				smoothed(prevAnchorXs, emitter, chain, jC, w), t);
-			float py = quadratic(smoothed(prevAnchorYs, emitter, chain, jA, w),
-				smoothed(prevAnchorYs, emitter, chain, j, w),
-				smoothed(prevAnchorYs, emitter, chain, jC, w), t);
-			float pz = quadratic(smoothed(prevAnchorZs, emitter, chain, jA, w),
-				smoothed(prevAnchorZs, emitter, chain, j, w),
-				smoothed(prevAnchorZs, emitter, chain, jC, w), t);
+			float px = quadratic(smoothed(pe.prevXs, emitter, chain, jA, w),
+				smoothed(pe.prevXs, emitter, chain, j, w),
+				smoothed(pe.prevXs, emitter, chain, jC, w), t);
+			float py = quadratic(smoothed(pe.prevYs, emitter, chain, jA, w),
+				smoothed(pe.prevYs, emitter, chain, j, w),
+				smoothed(pe.prevYs, emitter, chain, jC, w), t);
+			float pz = quadratic(smoothed(pe.prevZs, emitter, chain, jA, w),
+				smoothed(pe.prevZs, emitter, chain, j, w),
+				smoothed(pe.prevZs, emitter, chain, jC, w), t);
 			x = px + (x - px) * timeT;
 			y = py + (y - py) * timeT;
 			z = pz + (z - pz) * timeT;

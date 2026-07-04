@@ -168,8 +168,6 @@ class ParticleRenderer
 	private int activeObjects;
 	@Getter
 	private int lastBatchedVertices;
-	@Getter
-	private String cameraDebug = "";
 	private int outOfSceneKills;
 
 	ParticleRenderer(Client client)
@@ -365,11 +363,6 @@ class ParticleRenderer
 			yaw = client.getCameraYaw() * (float) (Math.PI / 1024);
 			pitch = client.getCameraPitch() * (float) (Math.PI / 1024);
 		}
-		cameraDebug = String.format("cam int %d/%d jau | used %.1f/%.1f jau (%s)",
-			client.getCameraYaw(), client.getCameraPitch(),
-			yaw * 1024 / Math.PI, pitch * 1024 / Math.PI,
-			client.isGpu() ? "fp" : "int");
-
 		float sinYaw = (float) Math.sin(yaw);
 		float cosYaw = (float) Math.cos(yaw);
 		float sinPitch = (float) Math.sin(pitch);
