@@ -383,6 +383,24 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	@Nullable
 	private String viewerTargetName;
 
+	// Animation recording for the viewer scrubber: per-tick vertex position
+	// samples over one topology, plus each sample's animation frame.
+	// Client thread.
+	private int recordTicksLeft;
+	private int recordObjectId = -1;
+	private int recordNpcId = -1;
+	private int recordGraphicId = -1;
+	@Nullable
+	private TileObject recordObject;
+	@Nullable
+	private NPC recordNpc;
+	@Nullable
+	private ModelSnapshot recordSnapshot;
+	private final List<float[]> recordXs = new ArrayList<>();
+	private final List<float[]> recordYs = new ArrayList<>();
+	private final List<float[]> recordZs = new ArrayList<>();
+	private final List<Integer> recordFrames = new ArrayList<>();
+
 	/**
 	 * Piece signatures present on the currently worn model; written on the
 	 * client thread, read by the sidebar for its "worn" indicator.
@@ -931,6 +949,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				pushGraphicSnapshot(pendingModel);
 			}
+		}
+		if (recordTicksLeft > 0)
+		{
+			sampleRecording();
 		}
 
 		processObjects(dt, level, radiusUnits, localLp);
@@ -2802,6 +2824,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			for (int gi = 0; gi < list.size(); gi++)
 			{
 				GraphicEmitter ge = list.get(gi);
+				// Frame windows gate spot anim emission like action anims;
+				// reset the carry so the window opening doesn't burst
+				if (!ge.style.frameMatches(spotAnim.getFrame()))
+				{
+					carries[gi] = 0;
+					continue;
+				}
 				float sustainable = budget / ge.style.getLifetimeSec() * 0.95f;
 				carries[gi] += Math.min(ge.style.getParticlesPerSecond() * densityScale, sustainable) * dt;
 				int count = (int) carries[gi];
@@ -3016,6 +3045,209 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		viewerObjectId = -1;
 		viewerNpcId = -1;
 		refreshSnapshot();
+	}
+
+	@Override
+	public void recordAnimation()
+	{
+		int objectId = viewerObjectId;
+		int npcId = viewerNpcId;
+		int graphicId = viewerGraphicId;
+		clientThread.invokeLater(() -> startRecording(objectId, npcId, graphicId));
+	}
+
+	/**
+	 * Begin sampling the viewer's target every tick for ~3 seconds. Object
+	 * and NPC sources are pinned to their nearest instance up front;
+	 * graphics are re-found per tick since their instances are transient.
+	 * Client thread.
+	 */
+	private void startRecording(int objectId, int npcId, int graphicId)
+	{
+		recordObjectId = objectId;
+		recordNpcId = npcId;
+		recordGraphicId = graphicId;
+		recordObject = null;
+		recordNpc = null;
+		recordSnapshot = null;
+		recordXs.clear();
+		recordYs.clear();
+		recordZs.clear();
+		recordFrames.clear();
+
+		Player player = client.getLocalPlayer();
+		if (player == null)
+		{
+			return;
+		}
+		LocalPoint lp = player.getLocalLocation();
+		if (objectId >= 0)
+		{
+			int bestDist = Integer.MAX_VALUE;
+			for (TileObject object : sceneObjects(player.getWorldView().getPlane()))
+			{
+				if (object.getId() != objectId)
+				{
+					continue;
+				}
+				int dist = object.getLocalLocation().distanceTo(lp);
+				if (dist < bestDist)
+				{
+					bestDist = dist;
+					recordObject = object;
+				}
+			}
+		}
+		else if (npcId >= 0)
+		{
+			int bestDist = Integer.MAX_VALUE;
+			for (NPC npc : client.getTopLevelWorldView().npcs())
+			{
+				if (npc == null || npc.getId() != npcId)
+				{
+					continue;
+				}
+				int dist = npc.getLocalLocation().distanceTo(lp);
+				if (dist < bestDist)
+				{
+					bestDist = dist;
+					recordNpc = npc;
+				}
+			}
+		}
+		recordTicksLeft = 150;
+	}
+
+	private void sampleRecording()
+	{
+		recordTicksLeft--;
+		Model model = null;
+		int frame = -1;
+		if (recordObjectId >= 0)
+		{
+			model = recordObject == null ? null : objectModel(recordObject);
+		}
+		else if (recordNpcId >= 0)
+		{
+			model = recordNpc == null ? null : recordNpc.getModel();
+			frame = recordNpc == null ? -1 : recordNpc.getAnimationFrame();
+		}
+		else if (recordGraphicId >= 0)
+		{
+			ActorSpotAnim spotAnim = findSpotAnim(recordGraphicId);
+			if (spotAnim != null)
+			{
+				model = spotAnim.getModel();
+				frame = spotAnim.getFrame();
+			}
+			else
+			{
+				model = findGraphicModel(recordGraphicId);
+			}
+		}
+		else
+		{
+			Player local = client.getLocalPlayer();
+			model = local == null ? null : local.getModel();
+			frame = local == null ? -1 : local.getAnimationFrame();
+		}
+
+		if (model != null)
+		{
+			if (recordSnapshot == null)
+			{
+				recordSnapshot = ModelSnapshot.capture(model);
+			}
+			if (model.getVerticesCount() != recordSnapshot.getVertexCount())
+			{
+				// Topology changed mid-recording (gear swap etc.); abort
+				recordTicksLeft = 0;
+				recordSnapshot = null;
+				recordXs.clear();
+				recordYs.clear();
+				recordZs.clear();
+				recordFrames.clear();
+				return;
+			}
+			recordXs.add(model.getVerticesX().clone());
+			recordYs.add(model.getVerticesY().clone());
+			recordZs.add(model.getVerticesZ().clone());
+			recordFrames.add(frame);
+		}
+
+		if (recordTicksLeft == 0)
+		{
+			finishRecording();
+		}
+	}
+
+	private void finishRecording()
+	{
+		ModelSnapshot snapshot = recordSnapshot;
+		recordSnapshot = null;
+		recordObject = null;
+		recordNpc = null;
+		if (snapshot == null || recordXs.isEmpty())
+		{
+			return;
+		}
+		float[][] xs = recordXs.toArray(new float[0][]);
+		float[][] ys = recordYs.toArray(new float[0][]);
+		float[][] zs = recordZs.toArray(new float[0][]);
+		int[] frames = new int[recordFrames.size()];
+		for (int i = 0; i < frames.length; i++)
+		{
+			frames[i] = recordFrames.get(i);
+		}
+		recordXs.clear();
+		recordYs.clear();
+		recordZs.clear();
+		recordFrames.clear();
+
+		// The recording's own topology becomes the snapshot so scrubber
+		// positions and pick indices line up exactly; keep the target name
+		pushViewerSnapshot(snapshot, null, false);
+		SwingUtilities.invokeLater(() ->
+		{
+			if (viewerFrame != null)
+			{
+				viewerFrame.setRecording(xs, ys, zs, frames);
+			}
+		});
+	}
+
+	@Nullable
+	private ActorSpotAnim findSpotAnim(int graphicId)
+	{
+		for (Player p : client.getTopLevelWorldView().players())
+		{
+			if (p == null)
+			{
+				continue;
+			}
+			for (ActorSpotAnim spotAnim : p.getSpotAnims())
+			{
+				if (spotAnim.getId() == graphicId)
+				{
+					return spotAnim;
+				}
+			}
+		}
+		for (NPC npc : client.getTopLevelWorldView().npcs())
+		{
+			if (npc == null)
+			{
+				continue;
+			}
+			for (ActorSpotAnim spotAnim : npc.getSpotAnims())
+			{
+				if (spotAnim.getId() == graphicId)
+				{
+					return spotAnim;
+				}
+			}
+		}
+		return null;
 	}
 
 	@Override
@@ -3254,6 +3486,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private void pushNonPlayerSnapshot(ModelSnapshot snapshot, @Nullable String targetName)
 	{
+		pushViewerSnapshot(snapshot, targetName, true);
+	}
+
+	private void pushViewerSnapshot(ModelSnapshot snapshot, @Nullable String targetName, boolean setName)
+	{
 		List<int[]> recent = recentProjectileList();
 		List<ModelViewerFrame.ObjectSighting> sightings = nearbySightings();
 		List<ModelViewerFrame.ObjectSighting> npcs = npcSightings();
@@ -3261,7 +3498,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		SwingUtilities.invokeLater(() ->
 		{
 			viewerSnapshot = snapshot;
-			viewerTargetName = targetName;
+			if (setName)
+			{
+				viewerTargetName = targetName;
+			}
 			if (viewerFrame != null)
 			{
 				viewerFrame.setSnapshot(snapshot,

@@ -23,6 +23,7 @@ import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.SwingConstants;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import net.runelite.client.ui.ColorScheme;
@@ -203,6 +204,7 @@ class ParticlesPanel extends PluginPanel
 		for (Category value : Category.values())
 		{
 			MaterialTab tab = new MaterialTab(value.label, tabGroup, new JPanel());
+			tab.setHorizontalAlignment(SwingConstants.CENTER);
 			tab.setOnSelectEvent(() ->
 			{
 				category = value;

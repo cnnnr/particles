@@ -23,6 +23,7 @@ import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JSlider;
 import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
 import javax.swing.JTextField;
@@ -86,6 +87,12 @@ class ModelViewerFrame extends JFrame
 		 * viewer for vertex picking.
 		 */
 		void loadGraphic(int graphicId);
+
+		/**
+		 * Sample the loaded target's animated mesh every tick for a few
+		 * seconds; the result arrives via setRecording.
+		 */
+		void recordAnimation();
 
 		/**
 		 * The user manually returned to the model view; drop any object
@@ -168,6 +175,15 @@ class ModelViewerFrame extends JFrame
 	private final JPanel graphicAddPanel = new JPanel(new BorderLayout(4, 0));
 	private final JTextField graphicIdField = new JTextField();
 	private final JPanel addPanelHolder = new JPanel(new BorderLayout());
+
+	// Animation scrubber below the viewport, shown while a recording exists
+	private final JSlider scrubSlider = new JSlider(0, 0, 0);
+	private final JLabel scrubLabel = new JLabel(" ");
+	private final JPanel scrubPanel = new JPanel(new BorderLayout(6, 0));
+	private float[][] recordingXs;
+	private float[][] recordingYs;
+	private float[][] recordingZs;
+	private int[] recordingFrames;
 
 	// Style editor controls
 	private final JButton colorButton = new JButton();
@@ -293,9 +309,14 @@ class ModelViewerFrame extends JFrame
 		JButton refresh = new JButton("Refresh snapshot");
 		refresh.addActionListener(e -> callbacks.refreshSnapshot());
 
+		JButton record = new JButton("Record anim (3s)");
+		record.setToolTipText("Sample the loaded target's animated mesh every tick for ~3 seconds, then scrub below the viewport to pick vertices on any frame. Trigger the animation while it records.");
+		record.addActionListener(e -> callbacks.recordAnimation());
+
 		JPanel top = new JPanel(new GridLayout(0, 1, 0, 4));
 		top.add(modeSelector);
 		top.add(refresh);
+		top.add(record);
 
 		JButton addProjectile = new JButton("Add");
 		addProjectile.setToolTipText("Create a profile for the typed projectile ID, or the selected capture row");
@@ -352,7 +373,17 @@ class ModelViewerFrame extends JFrame
 		left.add(bottom, BorderLayout.SOUTH);
 		left.setPreferredSize(new Dimension(250, 0));
 
-		JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, viewport);
+		scrubSlider.addChangeListener(e -> applyScrub());
+		scrubPanel.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+		scrubPanel.add(scrubSlider, BorderLayout.CENTER);
+		scrubPanel.add(scrubLabel, BorderLayout.EAST);
+		scrubPanel.setVisible(false);
+
+		JPanel right = new JPanel(new BorderLayout());
+		right.add(viewport, BorderLayout.CENTER);
+		right.add(scrubPanel, BorderLayout.SOUTH);
+
+		JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
 		split.setDividerLocation(250);
 		setContentPane(split);
 
@@ -418,6 +449,47 @@ class ModelViewerFrame extends JFrame
 		{
 			rebuildRows();
 		}
+	}
+
+	/**
+	 * Hand a finished animation recording to the scrubber: per-sample vertex
+	 * positions over the current snapshot's topology, plus each sample's
+	 * animation frame (-1 when the source exposes none). EDT only.
+	 */
+	void setRecording(float[][] xs, float[][] ys, float[][] zs, int[] frames)
+	{
+		recordingXs = xs;
+		recordingYs = ys;
+		recordingZs = zs;
+		recordingFrames = frames;
+		scrubSlider.setMaximum(frames.length - 1);
+		scrubSlider.setValue(0);
+		scrubPanel.setVisible(true);
+		scrubPanel.revalidate();
+		applyScrub();
+	}
+
+	private void applyScrub()
+	{
+		if (recordingXs == null)
+		{
+			return;
+		}
+		int i = Math.min(scrubSlider.getValue(), recordingXs.length - 1);
+		viewport.setPositionOverride(recordingXs[i], recordingYs[i], recordingZs[i]);
+		scrubLabel.setText(recordingFrames[i] >= 0
+			? "frame " + recordingFrames[i] + "  (" + (i + 1) + "/" + recordingFrames.length + ")"
+			: "sample " + (i + 1) + "/" + recordingFrames.length);
+	}
+
+	private void clearRecording()
+	{
+		recordingXs = null;
+		recordingYs = null;
+		recordingZs = null;
+		recordingFrames = null;
+		scrubPanel.setVisible(false);
+		viewport.setPositionOverride(null, null, null);
 	}
 
 	/**
@@ -727,7 +799,7 @@ class ModelViewerFrame extends JFrame
 		offsetYSpinner.setEnabled(!projectile);
 		offsetZSpinner.setEnabled(!projectile);
 		animFilterField.setEnabled(actorTarget);
-		animFramesField.setEnabled(actorTarget);
+		animFramesField.setEnabled(actorTarget || graphic);
 		moveLifetimeSpinner.setEnabled(actorTarget);
 		trailSpinner.setEnabled(!object && !graphic);
 		itemFilterField.setEnabled(!object && !npc && !graphic);
@@ -851,6 +923,7 @@ class ModelViewerFrame extends JFrame
 		this.graphicEntries = graphicEntries;
 		this.recentGraphics = recentGraphics;
 		appliedPieceIndex = Integer.MIN_VALUE;
+		clearRecording();
 		viewport.setSnapshot(snapshot);
 		viewport.setSelectedVertices(selectedVertices);
 

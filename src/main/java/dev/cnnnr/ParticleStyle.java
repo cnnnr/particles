@@ -131,6 +131,26 @@ class ParticleStyle
 	}
 
 	/**
+	 * The frame-window check alone, for spot anim gating where the graphic
+	 * ID itself already gates. No windows = every frame passes.
+	 */
+	boolean frameMatches(int frame)
+	{
+		if (animFrameRanges == null)
+		{
+			return true;
+		}
+		for (int i = 0; i < animFrameRanges.length; i += 2)
+		{
+			if (frame >= animFrameRanges[i] && frame <= animFrameRanges[i + 1])
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Animation gate: emit only while the player's action or pose animation
 	 * matches, with optional frame windows on action matches. An empty gate
 	 * always passes; live particles are unaffected and fade out naturally.

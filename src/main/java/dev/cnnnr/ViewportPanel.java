@@ -42,6 +42,14 @@ class ViewportPanel extends JPanel
 	private ModelSnapshot snapshot;
 	private int pieceFilter = -1; // -1 = all pieces
 
+	/**
+	 * Scrubber pose: replacement vertex positions sharing the snapshot's
+	 * topology, or null to show the snapshot's own pose.
+	 */
+	private float[] overrideX;
+	private float[] overrideY;
+	private float[] overrideZ;
+
 	private double yaw = 0.5;
 	private double pitch = 0.25;
 	private double zoom = 1.0;
@@ -153,6 +161,9 @@ class ViewportPanel extends JPanel
 		this.snapshot = snapshot;
 		this.pieceFilter = -1;
 		this.hoverVertex = -1;
+		this.overrideX = null;
+		this.overrideY = null;
+		this.overrideZ = null;
 		screenX = new int[snapshot.getVertexCount()];
 		screenY = new int[snapshot.getVertexCount()];
 		vertexVisible = new boolean[snapshot.getVertexCount()];
@@ -177,6 +188,23 @@ class ViewportPanel extends JPanel
 	void setLabelAll(boolean labelAll)
 	{
 		this.labelAll = labelAll;
+		repaint();
+	}
+
+	/**
+	 * Show a different pose of the same topology (the animation scrubber);
+	 * null restores the snapshot's own pose. Length-mismatched arrays are
+	 * ignored rather than risking out-of-bounds projection.
+	 */
+	void setPositionOverride(float[] xs, float[] ys, float[] zs)
+	{
+		if (snapshot != null && xs != null && xs.length != snapshot.getVertexCount())
+		{
+			return;
+		}
+		overrideX = xs;
+		overrideY = ys;
+		overrideZ = zs;
 		repaint();
 	}
 
@@ -410,9 +438,9 @@ class ViewportPanel extends JPanel
 		int halfW = getWidth() / 2;
 		int halfH = getHeight() / 2;
 
-		float[] vx = snapshot.getVerticesX();
-		float[] vy = snapshot.getVerticesY();
-		float[] vz = snapshot.getVerticesZ();
+		float[] vx = overrideX != null ? overrideX : snapshot.getVerticesX();
+		float[] vy = overrideY != null ? overrideY : snapshot.getVerticesY();
+		float[] vz = overrideZ != null ? overrideZ : snapshot.getVerticesZ();
 		for (int v = 0; v < snapshot.getVertexCount(); v++)
 		{
 			double dx = vx[v] - centerX;
