@@ -17,6 +17,8 @@ class EmitterProfile
 	static final String TARGET_PLAYER = "player";
 	static final String TARGET_PROJECTILE = "projectile";
 	static final String TARGET_OBJECT = "object";
+	static final String TARGET_NPC = "npc";
+	static final String TARGET_GRAPHIC = "graphic";
 
 	private String name;
 	/**
@@ -33,6 +35,17 @@ class EmitterProfile
 	 * the signature says which piece of its model.
 	 */
 	private int objectId = -1;
+	/**
+	 * NPC ID for NPC profiles; -1 otherwise. Like objects: ID plus piece
+	 * signature plus vertices.
+	 */
+	private int npcId = -1;
+	/**
+	 * Spot anim / graphics object ID for graphic profiles; -1 otherwise.
+	 * Point-based: emits at any graphics object with this ID and on any
+	 * actor playing it as a spot anim. No vertices.
+	 */
+	private int graphicId = -1;
 	/**
 	 * Topology signature of the mesh piece this profile attaches to. Multiple
 	 * profiles may share a signature (e.g. one per recolored item variant).
@@ -147,6 +160,8 @@ class EmitterProfile
 		c.targetType = targetType;
 		c.projectileId = projectileId;
 		c.objectId = objectId;
+		c.npcId = npcId;
+		c.graphicId = graphicId;
 		c.signature = signature;
 		c.enabled = enabled;
 		c.vertices = new HashSet<>(vertices);
@@ -162,6 +177,16 @@ class EmitterProfile
 	boolean isObjectTarget()
 	{
 		return TARGET_OBJECT.equals(targetType);
+	}
+
+	boolean isNpcTarget()
+	{
+		return TARGET_NPC.equals(targetType);
+	}
+
+	boolean isGraphicTarget()
+	{
+		return TARGET_GRAPHIC.equals(targetType);
 	}
 
 	/**

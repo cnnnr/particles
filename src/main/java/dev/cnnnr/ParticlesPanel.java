@@ -44,6 +44,8 @@ class ParticlesPanel extends PluginPanel
 		PLAYER("Player", false),
 		PROJECTILE("Proj", true),
 		WORLD("World", true),
+		NPC("NPC", true),
+		GRAPHIC("Gfx", true),
 		ANIMATED("Anim", true);
 
 		private final String label;
@@ -71,6 +73,10 @@ class ParticlesPanel extends PluginPanel
 					return profile.isProjectileTarget();
 				case WORLD:
 					return profile.isObjectTarget();
+				case NPC:
+					return profile.isNpcTarget();
+				case GRAPHIC:
+					return profile.isGraphicTarget();
 				case ANIMATED:
 					return !profile.getAnimationIds().isEmpty();
 				default:
@@ -269,7 +275,9 @@ class ParticlesPanel extends PluginPanel
 			&& presentSignatures.contains(profile.getSignature());
 		String text = profile.getName()
 			+ (profile.isProjectileTarget() ? " [proj " + profile.getProjectileId() + "]" : "")
-			+ (profile.isObjectTarget() ? " [obj " + profile.getObjectId() + "]" : "");
+			+ (profile.isObjectTarget() ? " [obj " + profile.getObjectId() + "]" : "")
+			+ (profile.isNpcTarget() ? " [npc " + profile.getNpcId() + "]" : "")
+			+ (profile.isGraphicTarget() ? " [gfx " + profile.getGraphicId() + "]" : "");
 
 		JCheckBox toggle = new JCheckBox(text, profile.isEnabled());
 		toggle.setToolTipText(worn
@@ -320,6 +328,18 @@ class ParticlesPanel extends PluginPanel
 			return true;
 		}
 		if (profile.isProjectileTarget() && String.valueOf(profile.getProjectileId()).contains(query))
+		{
+			return true;
+		}
+		if (profile.isObjectTarget() && String.valueOf(profile.getObjectId()).contains(query))
+		{
+			return true;
+		}
+		if (profile.isNpcTarget() && String.valueOf(profile.getNpcId()).contains(query))
+		{
+			return true;
+		}
+		if (profile.isGraphicTarget() && String.valueOf(profile.getGraphicId()).contains(query))
 		{
 			return true;
 		}

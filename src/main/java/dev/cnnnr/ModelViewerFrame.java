@@ -69,10 +69,17 @@ class ModelViewerFrame extends JFrame
 
 		String createProjectileProfile(int projectileId);
 
+		String createGraphicProfile(int graphicId);
+
 		/**
 		 * Capture a nearby instance of this scenery object into the viewer.
 		 */
 		void loadObject(int objectId);
+
+		/**
+		 * Capture a nearby instance of this NPC into the viewer.
+		 */
+		void loadNpc(int npcId);
 
 		/**
 		 * The user manually returned to the model view; drop any object
@@ -144,11 +151,17 @@ class ModelViewerFrame extends JFrame
 	private final DefaultListModel<String> rowListModel = new DefaultListModel<>();
 	private final JList<String> rowList;
 	private final List<Row> rows = new ArrayList<>();
-	private final JComboBox<String> modeSelector = new JComboBox<>(new String[]{"Model", "Projectiles", "World objects"});
+	private final JComboBox<String> modeSelector = new JComboBox<>(
+		new String[]{"Model", "Projectiles", "World objects", "NPCs", "Graphics"});
 	private final JPanel projectileAddPanel = new JPanel(new BorderLayout(4, 0));
 	private final JTextField projectileIdField = new JTextField();
 	private final JPanel objectLoadPanel = new JPanel(new BorderLayout(4, 0));
 	private final JTextField objectIdField = new JTextField();
+	private final JPanel npcLoadPanel = new JPanel(new BorderLayout(4, 0));
+	private final JTextField npcIdField = new JTextField();
+	private final JPanel graphicAddPanel = new JPanel(new BorderLayout(4, 0));
+	private final JTextField graphicIdField = new JTextField();
+	private final JPanel addPanelHolder = new JPanel(new BorderLayout());
 
 	// Style editor controls
 	private final JButton colorButton = new JButton();
@@ -186,6 +199,8 @@ class ModelViewerFrame extends JFrame
 	private boolean updatingMode;
 	private boolean projectileMode;
 	private boolean objectMode;
+	private boolean npcMode;
+	private boolean graphicMode;
 	private int appliedPieceIndex = -1;
 
 	// Latest data from the plugin, cached so mode switches can rebuild rows
@@ -194,6 +209,10 @@ class ModelViewerFrame extends JFrame
 	private List<int[]> recentProjectiles = List.of();
 	private List<ProfileEntry> objectEntries = List.of();
 	private List<ObjectSighting> objectSightings = List.of();
+	private List<ProfileEntry> npcEntries = List.of();
+	private List<ObjectSighting> npcSightings = List.of();
+	private List<ProfileEntry> graphicEntries = List.of();
+	private List<int[]> recentGraphics = List.of();
 
 	ModelViewerFrame(Callbacks callbacks)
 	{
@@ -204,14 +223,14 @@ class ModelViewerFrame extends JFrame
 		viewport = new ViewportPanel(
 			vertex ->
 			{
-				if (!projectileMode && !objectMode)
+				if (inModelMode())
 				{
 					callbacks.vertexToggled(selectedProfileKey, vertex);
 				}
 			},
 			(vertices, add) ->
 			{
-				if (!projectileMode && !objectMode)
+				if (inModelMode())
 				{
 					callbacks.boxSelected(selectedProfileKey, vertices, add);
 				}
@@ -279,7 +298,6 @@ class ModelViewerFrame extends JFrame
 		projectileAddPanel.add(new JLabel("ID "), BorderLayout.WEST);
 		projectileAddPanel.add(projectileIdField, BorderLayout.CENTER);
 		projectileAddPanel.add(addProjectile, BorderLayout.EAST);
-		projectileAddPanel.setVisible(false);
 
 		JButton loadObject = new JButton("Load");
 		loadObject.setToolTipText("Capture the typed object ID, or the selected nearby object, into the viewer for vertex picking");
@@ -288,7 +306,22 @@ class ModelViewerFrame extends JFrame
 		objectLoadPanel.add(new JLabel("ID "), BorderLayout.WEST);
 		objectLoadPanel.add(objectIdField, BorderLayout.CENTER);
 		objectLoadPanel.add(loadObject, BorderLayout.EAST);
-		objectLoadPanel.setVisible(false);
+
+		JButton loadNpc = new JButton("Load");
+		loadNpc.setToolTipText("Capture the typed NPC ID, or the selected nearby NPC, into the viewer for vertex picking");
+		loadNpc.addActionListener(e -> loadSelectedNpc());
+		npcIdField.setToolTipText("NPC ID; leave blank to use the selected nearby NPC");
+		npcLoadPanel.add(new JLabel("ID "), BorderLayout.WEST);
+		npcLoadPanel.add(npcIdField, BorderLayout.CENTER);
+		npcLoadPanel.add(loadNpc, BorderLayout.EAST);
+
+		JButton addGraphic = new JButton("Add");
+		addGraphic.setToolTipText("Create a profile for the typed spot anim ID, or the selected seen graphic");
+		addGraphic.addActionListener(e -> addGraphicProfile());
+		graphicIdField.setToolTipText("Spot anim / graphics ID; leave blank to use the selected seen row");
+		graphicAddPanel.add(new JLabel("ID "), BorderLayout.WEST);
+		graphicAddPanel.add(graphicIdField, BorderLayout.CENTER);
+		graphicAddPanel.add(addGraphic, BorderLayout.EAST);
 
 		JCheckBox labelAll = new JCheckBox("Label emitter vertices");
 		labelAll.addActionListener(e -> viewport.setLabelAll(labelAll.isSelected()));
@@ -299,10 +332,7 @@ class ModelViewerFrame extends JFrame
 		left.add(new JScrollPane(rowList), BorderLayout.CENTER);
 
 		JPanel bottom = new JPanel(new BorderLayout(0, 6));
-		JPanel addPanels = new JPanel(new BorderLayout(0, 4));
-		addPanels.add(projectileAddPanel, BorderLayout.NORTH);
-		addPanels.add(objectLoadPanel, BorderLayout.SOUTH);
-		bottom.add(addPanels, BorderLayout.NORTH);
+		bottom.add(addPanelHolder, BorderLayout.NORTH);
 		JPanel bottomMid = new JPanel(new BorderLayout(0, 6));
 		bottomMid.add(labelAll, BorderLayout.NORTH);
 		bottomMid.add(buildStyleEditor(), BorderLayout.CENTER);
@@ -320,10 +350,48 @@ class ModelViewerFrame extends JFrame
 
 	private void loadSelectedObject()
 	{
+		int id = parseIdOrSelection(objectIdField);
+		if (id < 0)
+		{
+			return;
+		}
+		// Jump to the model view so the incoming snapshot is pickable
+		setMode(0);
+		callbacks.loadObject(id);
+	}
+
+	private void loadSelectedNpc()
+	{
+		int id = parseIdOrSelection(npcIdField);
+		if (id < 0)
+		{
+			return;
+		}
+		setMode(0);
+		callbacks.loadNpc(id);
+	}
+
+	private void addGraphicProfile()
+	{
+		int id = parseIdOrSelection(graphicIdField);
+		if (id < 0)
+		{
+			return;
+		}
+		pendingSelection = callbacks.createGraphicProfile(id);
+		callbacks.refreshSnapshot();
+	}
+
+	/**
+	 * The typed ID, falling back to the selected capture row; clears the
+	 * field on success.
+	 */
+	private int parseIdOrSelection(JTextField field)
+	{
 		int id = -1;
 		try
 		{
-			id = Integer.parseInt(objectIdField.getText().trim());
+			id = Integer.parseInt(field.getText().trim());
 		}
 		catch (NumberFormatException ignored)
 		{
@@ -332,14 +400,16 @@ class ModelViewerFrame extends JFrame
 		{
 			id = selectedCaptureId;
 		}
-		if (id < 0)
+		if (id >= 0)
 		{
-			return;
+			field.setText("");
 		}
-		objectIdField.setText("");
-		// Jump to the model view so the incoming snapshot is pickable
-		setMode(0);
-		callbacks.loadObject(id);
+		return id;
+	}
+
+	private boolean inModelMode()
+	{
+		return !projectileMode && !objectMode && !npcMode && !graphicMode;
 	}
 
 	private void addProjectileProfile()
@@ -550,11 +620,17 @@ class ModelViewerFrame extends JFrame
 		EmitterProfile profile = selectedProfile();
 		if (profile == null)
 		{
-			if (objectMode)
+			if (objectMode || npcMode)
 			{
 				editorHint.setText(selectedCaptureId >= 0
-					? "Press Load to open object " + selectedCaptureId
-					: "Select a nearby object and press Load");
+					? "Press Load to open " + (objectMode ? "object " : "NPC ") + selectedCaptureId
+					: "Select a nearby " + (objectMode ? "object" : "NPC") + " and press Load");
+			}
+			else if (graphicMode)
+			{
+				editorHint.setText(selectedCaptureId >= 0
+					? "Press Add to create a profile for graphic " + selectedCaptureId
+					: "Select a profile, or a seen graphic and press Add");
 			}
 			else if (selectedCaptureId >= 0)
 			{
@@ -599,21 +675,26 @@ class ModelViewerFrame extends JFrame
 		editorHint.setText(profile.getName());
 		setEditorEnabled(true);
 
-		// Vertex-anchored settings don't apply to projectiles; player-only
-		// settings (movement, worn items, animations) not to scenery
+		// Gating by what the target type can support: feathering needs
+		// picked vertices, animation and movement settings need an actor,
+		// item gates need the local player's gear
 		boolean projectile = profile.isProjectileTarget();
+		boolean graphic = profile.isGraphicTarget();
 		boolean object = profile.isObjectTarget();
-		featherSpinner.setEnabled(!projectile && !object);
+		boolean npc = profile.isNpcTarget();
+		boolean vertexTarget = !projectile && !graphic;
+		boolean actorTarget = EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType()) || npc;
+		featherSpinner.setEnabled(vertexTarget);
 		offsetXSpinner.setEnabled(!projectile);
 		offsetYSpinner.setEnabled(!projectile);
 		offsetZSpinner.setEnabled(!projectile);
-		animFilterField.setEnabled(!projectile && !object);
-		animFramesField.setEnabled(!projectile && !object);
-		moveLifetimeSpinner.setEnabled(!object);
-		trailSpinner.setEnabled(!object);
-		itemFilterField.setEnabled(!object);
-		wornItemsCombo.setEnabled(!object);
-		addWornItemButton.setEnabled(!object);
+		animFilterField.setEnabled(actorTarget);
+		animFramesField.setEnabled(actorTarget);
+		moveLifetimeSpinner.setEnabled(actorTarget);
+		trailSpinner.setEnabled(!object && !graphic);
+		itemFilterField.setEnabled(!object && !npc && !graphic);
+		wornItemsCombo.setEnabled(!object && !npc && !graphic);
+		addWornItemButton.setEnabled(!object && !npc && !graphic);
 	}
 
 	private static String joinIds(Set<Integer> ids)
@@ -717,7 +798,9 @@ class ModelViewerFrame extends JFrame
 	void setSnapshot(ModelSnapshot snapshot, Set<Integer> selectedVertices,
 		Map<String, List<ProfileEntry>> profilesBySignature, List<String> wornItems,
 		List<ProfileEntry> projectileEntries, List<int[]> recentProjectiles,
-		List<ProfileEntry> objectEntries, List<ObjectSighting> objectSightings)
+		List<ProfileEntry> objectEntries, List<ObjectSighting> objectSightings,
+		List<ProfileEntry> npcEntries, List<ObjectSighting> npcSightings,
+		List<ProfileEntry> graphicEntries, List<int[]> recentGraphics)
 	{
 		this.snapshot = snapshot;
 		this.profilesBySignature = profilesBySignature;
@@ -725,15 +808,19 @@ class ModelViewerFrame extends JFrame
 		this.recentProjectiles = recentProjectiles;
 		this.objectEntries = objectEntries;
 		this.objectSightings = objectSightings;
+		this.npcEntries = npcEntries;
+		this.npcSightings = npcSightings;
+		this.graphicEntries = graphicEntries;
+		this.recentGraphics = recentGraphics;
 		appliedPieceIndex = Integer.MIN_VALUE;
 		viewport.setSnapshot(snapshot);
 		viewport.setSelectedVertices(selectedVertices);
 
 		wornItemsCombo.setModel(new DefaultComboBoxModel<>(wornItems.toArray(new String[0])));
 
-		// Editing a projectile profile from the sidebar lands in its mode;
-		// object profiles land in the model view (the plugin loads their
-		// object as the snapshot)
+		// Editing a projectile or graphic profile from the sidebar lands in
+		// its mode; object and NPC profiles land in the model view (the
+		// plugin loads their model as the snapshot)
 		if (pendingSelection != null)
 		{
 			boolean pendingIsProjectile = false;
@@ -745,7 +832,16 @@ class ModelViewerFrame extends JFrame
 					break;
 				}
 			}
-			setMode(pendingIsProjectile ? 1 : 0);
+			boolean pendingIsGraphic = false;
+			for (ProfileEntry entry : graphicEntries)
+			{
+				if (entry.key.equals(pendingSelection))
+				{
+					pendingIsGraphic = true;
+					break;
+				}
+			}
+			setMode(pendingIsProjectile ? 1 : pendingIsGraphic ? 4 : 0);
 		}
 		rebuildRows();
 	}
@@ -762,8 +858,27 @@ class ModelViewerFrame extends JFrame
 	{
 		projectileMode = index == 1;
 		objectMode = index == 2;
-		projectileAddPanel.setVisible(projectileMode);
-		objectLoadPanel.setVisible(objectMode);
+		npcMode = index == 3;
+		graphicMode = index == 4;
+		addPanelHolder.removeAll();
+		if (projectileMode)
+		{
+			addPanelHolder.add(projectileAddPanel, BorderLayout.CENTER);
+		}
+		else if (objectMode)
+		{
+			addPanelHolder.add(objectLoadPanel, BorderLayout.CENTER);
+		}
+		else if (npcMode)
+		{
+			addPanelHolder.add(npcLoadPanel, BorderLayout.CENTER);
+		}
+		else if (graphicMode)
+		{
+			addPanelHolder.add(graphicAddPanel, BorderLayout.CENTER);
+		}
+		addPanelHolder.revalidate();
+		addPanelHolder.repaint();
 	}
 
 	/**
@@ -771,11 +886,13 @@ class ModelViewerFrame extends JFrame
 	 * created a profile. Keeps the camera. EDT only.
 	 */
 	void refreshRows(Map<String, List<ProfileEntry>> profilesBySignature, List<ProfileEntry> projectileEntries,
-		List<ProfileEntry> objectEntries)
+		List<ProfileEntry> objectEntries, List<ProfileEntry> npcEntries, List<ProfileEntry> graphicEntries)
 	{
 		this.profilesBySignature = profilesBySignature;
 		this.projectileEntries = projectileEntries;
 		this.objectEntries = objectEntries;
+		this.npcEntries = npcEntries;
+		this.graphicEntries = graphicEntries;
 		if (snapshot != null)
 		{
 			rebuildRows();
@@ -789,7 +906,7 @@ class ModelViewerFrame extends JFrame
 		rows.clear();
 		int selectRow = 0;
 
-		if (!projectileMode && !objectMode)
+		if (inModelMode())
 		{
 			rowListModel.addElement("All pieces (" + snapshot.getVertexCount() + "v)");
 			rows.add(new Row(-1, null));
@@ -862,9 +979,9 @@ class ModelViewerFrame extends JFrame
 				rows.add(new Row(-1, null));
 			}
 		}
-		else
+		else if (objectMode || npcMode)
 		{
-			for (ProfileEntry entry : objectEntries)
+			for (ProfileEntry entry : objectMode ? objectEntries : npcEntries)
 			{
 				rowListModel.addElement(entry.name);
 				rows.add(new Row(-1, entry.key));
@@ -873,7 +990,7 @@ class ModelViewerFrame extends JFrame
 					selectRow = rows.size() - 1;
 				}
 			}
-			for (ObjectSighting sighting : objectSightings)
+			for (ObjectSighting sighting : objectMode ? objectSightings : npcSightings)
 			{
 				rowListModel.addElement("near: " + sighting.name + " (" + sighting.id + ") "
 					+ sighting.distanceTiles + " tiles");
@@ -881,7 +998,31 @@ class ModelViewerFrame extends JFrame
 			}
 			if (rows.isEmpty())
 			{
-				rowListModel.addElement("No objects nearby - Refresh snapshot to rescan");
+				rowListModel.addElement(objectMode
+					? "No objects nearby - Refresh snapshot to rescan"
+					: "No NPCs nearby - Refresh snapshot to rescan");
+				rows.add(new Row(-1, null));
+			}
+		}
+		else
+		{
+			for (ProfileEntry entry : graphicEntries)
+			{
+				rowListModel.addElement(entry.name);
+				rows.add(new Row(-1, entry.key));
+				if (entry.key.equals(pendingSelection))
+				{
+					selectRow = rows.size() - 1;
+				}
+			}
+			for (int[] recent : recentGraphics)
+			{
+				rowListModel.addElement("seen: " + recent[0] + "  (" + recent[1] + "x, " + recent[2] + "s ago)");
+				rows.add(new Row(-1, null, recent[0]));
+			}
+			if (rows.isEmpty())
+			{
+				rowListModel.addElement("No graphics seen yet - cast something nearby, then Refresh");
 				rows.add(new Row(-1, null));
 			}
 		}

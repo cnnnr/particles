@@ -23,11 +23,14 @@ import javax.inject.Named;
 import javax.swing.SwingUtilities;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.Actor;
+import net.runelite.api.ActorSpotAnim;
 import net.runelite.api.Client;
 import net.runelite.api.DecorativeObject;
 import net.runelite.api.DynamicObject;
 import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
+import net.runelite.api.GraphicsObject;
 import net.runelite.api.GroundObject;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
@@ -50,8 +53,13 @@ import net.runelite.api.events.DecorativeObjectSpawned;
 import net.runelite.api.events.GameObjectDespawned;
 import net.runelite.api.events.GameObjectSpawned;
 import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GraphicChanged;
+import net.runelite.api.events.GraphicsObjectCreated;
 import net.runelite.api.events.GroundObjectDespawned;
 import net.runelite.api.events.GroundObjectSpawned;
+import net.runelite.api.events.NpcChanged;
+import net.runelite.api.events.NpcDespawned;
+import net.runelite.api.events.NpcSpawned;
 import net.runelite.api.events.WallObjectDespawned;
 import net.runelite.api.events.WallObjectSpawned;
 import net.runelite.client.callback.ClientThread;
@@ -206,6 +214,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		 * Fractional carry of distance-based emission per anchor slot.
 		 */
 		float[] trailCarry = new float[0];
+		/**
+		 * Rate carries for point emission from the actor's active spot
+		 * anims, by graphic ID. Lazily created; most actors have none.
+		 */
+		@Nullable
+		Map<Integer, double[]> spotAnimCarries;
 		int anchorCount;
 		int prevCount;
 		boolean rebuilt;
@@ -268,6 +282,29 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	private Set<Integer> profiledObjectIds = Set.of();
 	private int profiledIdsRevision = -1;
 
+	/**
+	 * Tracked NPC instances; NPCs reuse the player emitter state since they
+	 * move and animate the same way. Client thread.
+	 */
+	private final Map<NPC, PlayerEmitters> npcEmitters = new HashMap<>();
+	private Set<Integer> profiledNpcIds = Set.of();
+
+	/**
+	 * Enabled graphic profiles by spot anim ID: point emission at graphics
+	 * objects and on actors playing the spot anim. Client thread.
+	 */
+	private final Map<Integer, ParticleStyle> graphicStyles = new HashMap<>();
+	/**
+	 * Rate carries per live graphics object, swept against the live set.
+	 */
+	private final Map<GraphicsObject, double[]> graphicCarries = new HashMap<>();
+	private final Set<GraphicsObject> liveGraphics = new HashSet<>();
+	/**
+	 * Recently seen spot anim / graphics IDs for the capture list, as
+	 * id -> [count, lastSeenMs].
+	 */
+	private final Map<Integer, long[]> recentGraphics = new LinkedHashMap<>();
+
 	// Debug marker aggregate across all players, read by the overlay; only
 	// filled while markers are shown. Client thread.
 	@Getter
@@ -300,11 +337,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	private ModelSnapshot viewerSnapshot;
 
 	/**
-	 * The scenery object ID the viewer's snapshot was captured from, or -1
-	 * when it shows the player. Decides which profile family vertex clicks
-	 * create. EDT only; snapshot captures receive it as a parameter.
+	 * The scenery object or NPC ID the viewer's snapshot was captured from,
+	 * or -1 when it shows the player. Decides which profile family vertex
+	 * clicks create. EDT only; snapshot captures receive them as parameters.
 	 */
 	private int viewerObjectId = -1;
+	private int viewerNpcId = -1;
 
 	/**
 	 * Piece signatures present on the currently worn model; written on the
@@ -449,6 +487,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			anchorCount = 0;
 			playerEmitters.clear();
 			objectEmitters.clear();
+			npcEmitters.clear();
+			graphicCarries.clear();
+			recentGraphics.clear();
 			projectileTrackers.clear();
 			activeProjectileProfiles.clear();
 			recentProjectiles.clear();
@@ -535,6 +576,79 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	}
 
 	@Subscribe
+	public void onNpcSpawned(NpcSpawned event)
+	{
+		trackNpc(event.getNpc());
+	}
+
+	@Subscribe
+	public void onNpcDespawned(NpcDespawned event)
+	{
+		npcEmitters.remove(event.getNpc());
+	}
+
+	@Subscribe
+	public void onNpcChanged(NpcChanged event)
+	{
+		// Transmog changed the ID; drop state and re-evaluate tracking
+		npcEmitters.remove(event.getNpc());
+		trackNpc(event.getNpc());
+	}
+
+	private void trackNpc(NPC npc)
+	{
+		if (profiledNpcIds.contains(npc.getId()))
+		{
+			npcEmitters.putIfAbsent(npc, new PlayerEmitters());
+		}
+	}
+
+	@Subscribe
+	public void onGraphicsObjectCreated(GraphicsObjectCreated event)
+	{
+		noteGraphic(event.getGraphicsObject().getId());
+	}
+
+	@Subscribe
+	public void onGraphicChanged(GraphicChanged event)
+	{
+		for (ActorSpotAnim spotAnim : event.getActor().getSpotAnims())
+		{
+			noteGraphic(spotAnim.getId());
+		}
+	}
+
+	/**
+	 * Record a spot anim / graphics ID sighting for the capture list,
+	 * evicting the stalest entry past the cap.
+	 */
+	private void noteGraphic(int id)
+	{
+		long[] seen = recentGraphics.get(id);
+		if (seen != null)
+		{
+			seen[0]++;
+			seen[1] = System.currentTimeMillis();
+			return;
+		}
+		if (recentGraphics.size() >= 24)
+		{
+			Integer oldestId = null;
+			long oldestSeen = Long.MAX_VALUE;
+			for (Map.Entry<Integer, long[]> entry : recentGraphics.entrySet())
+			{
+				if (entry.getValue()[1] < oldestSeen)
+				{
+					oldestSeen = entry.getValue()[1];
+					oldestId = entry.getKey();
+				}
+			}
+			recentGraphics.remove(oldestId);
+		}
+		recentGraphics.put(id, new long[]{1, System.currentTimeMillis()});
+	}
+
+	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
 	{
 		switch (event.getGameState())
@@ -545,6 +659,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				particleSystem.clear(DISCARD);
 				renderer.reset();
 				objectEmitters.clear();
+				npcEmitters.clear();
+				graphicCarries.clear();
 				break;
 			case LOGGED_IN:
 				// Player models are rebuilt on scene load and their vertex
@@ -580,10 +696,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			// Emitters hold style references; re-resolve everyone
 			invalidateResolutions();
 		}
-		if (profiledIdsRevision != storeRevision)
+		// Gate on renderer readiness so styles resolve on the first rebuild;
+		// before the particle mesh loads, getStyle would return null forever
+		if (renderer.isReady() && profiledIdsRevision != storeRevision)
 		{
 			profiledIdsRevision = storeRevision;
 			rebuildProfiledObjects();
+			rebuildProfiledNpcs();
+			rebuildGraphicStyles();
 		}
 
 		Player localPlayer = client.getLocalPlayer();
@@ -753,6 +873,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			resolvePlayer(pe, player);
 			updateAnchors(pe, player, markers);
 			emit(dt, pe, player);
+			emitActorSpotAnims(dt, pe, player);
 		}
 		Iterator<PlayerEmitters> peIt = playerEmitters.values().iterator();
 		while (peIt.hasNext())
@@ -764,6 +885,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		}
 
 		processObjects(dt, level, radiusUnits, localLp);
+		processNpcs(dt, level, radiusUnits, localLp);
+		emitGraphicsObjects(dt, level, radiusUnits, localLp);
 		updateStackOracle(level);
 		emitProjectiles(dt);
 		particleSystem.update(dt, deathStats);
@@ -1024,7 +1147,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * Transform a player's active emitter vertices from their posed model
 	 * into world (local scene) coordinates.
 	 */
-	private void updateAnchors(PlayerEmitters pe, Player player, boolean markers)
+	private void updateAnchors(PlayerEmitters pe, Actor player, boolean markers)
 	{
 		// Keep last tick's anchors for movement-segment interpolation
 		pe.prevCount = pe.anchorCount;
@@ -1520,7 +1643,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		return ids;
 	}
 
-	private void emit(float dt, PlayerEmitters pe, Player player)
+	private void emit(float dt, PlayerEmitters pe, Actor player)
 	{
 		if (pe.anchorCount == 0)
 		{
@@ -2042,7 +2165,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 					{
 						vertices[i] = globals.get(i);
 					}
-					oe.emitters.add(new ActiveEmitter(style, vertices, null));
+					int[][] chains = style.getFeatherStrength() > 0
+						? buildChains(snapshot, piece, vertices)
+						: null;
+					oe.emitters.add(new ActiveEmitter(style, vertices, chains));
 				}
 			}
 		}
@@ -2138,16 +2264,52 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			emitter.carry += rate * dt;
 			int count = (int) emitter.carry;
 			emitter.carry -= count;
+			boolean feathered = style.getFeatherStrength() > 0 && emitter.chains != null
+				&& emitter.anchorCount == emitter.vertices.length;
 			for (int i = 0; i < count; i++)
 			{
 				if (particleSystem.getParticles().size() >= budget)
 				{
 					return;
 				}
-				int a = emitter.anchorStart + random.nextInt(emitter.anchorCount);
-				spawnAt(style, oe.anchorXs[a], oe.anchorYs[a], oe.anchorZs[a], 1f);
+				if (feathered)
+				{
+					spawnFeatheredStatic(oe.anchorXs, oe.anchorYs, oe.anchorZs, emitter);
+				}
+				else
+				{
+					int a = emitter.anchorStart + random.nextInt(emitter.anchorCount);
+					spawnAt(style, oe.anchorXs[a], oe.anchorYs[a], oe.anchorZs[a], 1f);
+				}
 			}
 		}
+	}
+
+	/**
+	 * Feathered spawn over static anchors: the smoothed-chain curve without
+	 * the movement lerp that the player variant threads through prev arrays.
+	 */
+	private void spawnFeatheredStatic(float[] xs, float[] ys, float[] zs, ActiveEmitter emitter)
+	{
+		int k = random.nextInt(emitter.sampleChainOf.length);
+		int[] chain = emitter.chains[emitter.sampleChainOf[k]];
+		int j = emitter.samplePosOf[k];
+		int w = emitter.style.getFeatherStrength();
+		int jA = Math.max(0, j - 1);
+		int jC = Math.min(chain.length - 1, j + 1);
+		float t = random.nextFloat();
+
+		float x = quadratic(smoothed(xs, emitter, chain, jA, w),
+			smoothed(xs, emitter, chain, j, w),
+			smoothed(xs, emitter, chain, jC, w), t);
+		float y = quadratic(smoothed(ys, emitter, chain, jA, w),
+			smoothed(ys, emitter, chain, j, w),
+			smoothed(ys, emitter, chain, jC, w), t);
+		float z = quadratic(smoothed(zs, emitter, chain, jA, w),
+			smoothed(zs, emitter, chain, j, w),
+			smoothed(zs, emitter, chain, jC, w), t);
+
+		spawnAt(emitter.style, x, y, z, 1f);
 	}
 
 	@Nullable
@@ -2271,17 +2433,333 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		return out.size() > 30 ? new ArrayList<>(out.subList(0, 30)) : out;
 	}
 
+	// ==================== NPCs and graphics ====================
+
+	private void rebuildProfiledNpcs()
+	{
+		Set<Integer> ids = new HashSet<>();
+		for (EmitterProfile profile : store.snapshotAll().values())
+		{
+			if (profile.isNpcTarget() && profile.getNpcId() >= 0)
+			{
+				ids.add(profile.getNpcId());
+			}
+		}
+		profiledNpcIds = ids;
+		npcEmitters.clear();
+		if (ids.isEmpty())
+		{
+			return;
+		}
+		for (NPC npc : client.getTopLevelWorldView().npcs())
+		{
+			if (npc != null)
+			{
+				trackNpc(npc);
+			}
+		}
+	}
+
+	private void rebuildGraphicStyles()
+	{
+		graphicStyles.clear();
+		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (!profile.isGraphicTarget() || profile.getGraphicId() < 0 || !profile.isEnabled()
+				|| (!developerMode && ParticlesPanel.Category.isWip(profile)))
+			{
+				continue;
+			}
+			ParticleStyle style = renderer.getStyle(entry.getKey());
+			if (style != null)
+			{
+				graphicStyles.put(profile.getGraphicId(), style);
+			}
+		}
+	}
+
+	/**
+	 * NPCs run the player pipeline - posed model anchors, orientation,
+	 * trails, feathering, animation gates - minus the equipment resolution
+	 * (the NPC ID is the whole identity) and minus the stack gate (stacked
+	 * NPCs are rare enough that all tracked ones emit).
+	 */
+	private void processNpcs(float dt, int level, int radiusUnits, LocalPoint localLp)
+	{
+		if (npcEmitters.isEmpty())
+		{
+			return;
+		}
+		int revision = store.getRevision();
+		boolean markers = config.showAnchor() && developerMode;
+		for (Map.Entry<NPC, PlayerEmitters> entry : npcEmitters.entrySet())
+		{
+			NPC npc = entry.getKey();
+			PlayerEmitters pe = entry.getValue();
+			if (npc.getWorldLocation().getPlane() != level
+				|| npc.getLocalLocation().distanceTo(localLp) > radiusUnits)
+			{
+				pe.anchorCount = 0;
+				pe.prevCount = 0;
+				for (ActiveEmitter emitter : pe.emitters)
+				{
+					emitter.carry = 0;
+				}
+				continue;
+			}
+			if (pe.revision != revision || pe.equipmentIds == null
+				|| pe.equipmentIds[0] != npc.getId())
+			{
+				resolveNpc(pe, npc, revision);
+			}
+			updateAnchors(pe, npc, markers);
+			emit(dt, pe, npc);
+			emitActorSpotAnims(dt, pe, npc);
+		}
+	}
+
+	private void resolveNpc(PlayerEmitters pe, NPC npc, int revision)
+	{
+		pe.revision = revision;
+		// The equipment cache slot doubles as the resolve key for NPCs: a
+		// single-element array holding the (transform-aware) NPC ID
+		pe.equipmentIds = new int[]{npc.getId()};
+		pe.rebuilt = true;
+		pe.emitters.clear();
+		Model model = npc.getModel();
+		if (model == null)
+		{
+			pe.equipmentIds = null;
+			return;
+		}
+		ModelSnapshot snapshot = ModelSnapshot.capture(model);
+		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (!profile.isNpcTarget() || profile.getNpcId() != npc.getId()
+				|| !profile.isEnabled() || profile.getVertices().isEmpty()
+				|| (!developerMode && ParticlesPanel.Category.isWip(profile)))
+			{
+				continue;
+			}
+			ParticleStyle style = renderer.getStyle(entry.getKey());
+			if (style == null)
+			{
+				continue;
+			}
+			for (ModelSnapshot.Piece piece : snapshot.getPieces())
+			{
+				if (!piece.getSignature().equals(profile.getSignature()))
+				{
+					continue;
+				}
+				List<Integer> globals = new ArrayList<>();
+				for (int local : profile.getVertices())
+				{
+					if (local >= 0 && local < piece.getVertices().length)
+					{
+						globals.add(piece.getVertices()[local]);
+					}
+				}
+				if (!globals.isEmpty())
+				{
+					int[] vertices = new int[globals.size()];
+					for (int i = 0; i < vertices.length; i++)
+					{
+						vertices[i] = globals.get(i);
+					}
+					int[][] chains = style.getFeatherStrength() > 0
+						? buildChains(snapshot, piece, vertices)
+						: null;
+					pe.emitters.add(new ActiveEmitter(style, vertices, chains));
+				}
+			}
+		}
+	}
+
+	/**
+	 * Point emission for graphic profiles matching the actor's active spot
+	 * anims (vengeance, skulls, teleports). No vertices or feathering - the
+	 * anchor is the actor's base height plus the spot anim's height offset.
+	 */
+	private void emitActorSpotAnims(float dt, PlayerEmitters pe, Actor actor)
+	{
+		if (graphicStyles.isEmpty())
+		{
+			return;
+		}
+		int budget = config.maxParticles();
+		float densityScale = config.density().getFactor();
+		LocalPoint lp = actor.getLocalLocation();
+		int baseZ = Integer.MIN_VALUE;
+		for (ActorSpotAnim spotAnim : actor.getSpotAnims())
+		{
+			ParticleStyle style = graphicStyles.get(spotAnim.getId());
+			if (style == null)
+			{
+				continue;
+			}
+			if (pe.spotAnimCarries == null)
+			{
+				pe.spotAnimCarries = new HashMap<>();
+			}
+			double[] carry = pe.spotAnimCarries.computeIfAbsent(spotAnim.getId(), k -> new double[1]);
+			float sustainable = budget / style.getLifetimeSec() * 0.95f;
+			carry[0] += Math.min(style.getParticlesPerSecond() * densityScale, sustainable) * dt;
+			int count = (int) carry[0];
+			carry[0] -= count;
+			if (count == 0)
+			{
+				continue;
+			}
+			if (baseZ == Integer.MIN_VALUE)
+			{
+				baseZ = Perspective.getFootprintTileHeight(client, lp, anchorLevel, actor.getFootprintSize())
+					- actor.getAnimationHeightOffset();
+			}
+			float z = baseZ - spotAnim.getHeight();
+			for (int i = 0; i < count; i++)
+			{
+				if (particleSystem.getParticles().size() >= budget)
+				{
+					return;
+				}
+				spawnAt(style, lp.getX() + style.getOffsetX(), lp.getY() + style.getOffsetY(),
+					z - style.getOffsetZ(), 1f);
+			}
+		}
+	}
+
+	/**
+	 * Point emission at live graphics objects (spell splats, tile effects)
+	 * whose IDs carry a graphic profile.
+	 */
+	private void emitGraphicsObjects(float dt, int level, int radiusUnits, LocalPoint localLp)
+	{
+		if (graphicStyles.isEmpty())
+		{
+			if (!graphicCarries.isEmpty())
+			{
+				graphicCarries.clear();
+			}
+			return;
+		}
+		liveGraphics.clear();
+		int budget = config.maxParticles();
+		float densityScale = config.density().getFactor();
+		for (GraphicsObject graphic : client.getTopLevelWorldView().getGraphicsObjects())
+		{
+			if (graphic.finished())
+			{
+				continue;
+			}
+			ParticleStyle style = graphicStyles.get(graphic.getId());
+			if (style == null)
+			{
+				continue;
+			}
+			liveGraphics.add(graphic);
+			LocalPoint lp = graphic.getLocation();
+			if (graphic.getLevel() != level || lp.distanceTo(localLp) > radiusUnits)
+			{
+				continue;
+			}
+			double[] carry = graphicCarries.computeIfAbsent(graphic, k -> new double[1]);
+			float sustainable = budget / style.getLifetimeSec() * 0.95f;
+			carry[0] += Math.min(style.getParticlesPerSecond() * densityScale, sustainable) * dt;
+			int count = (int) carry[0];
+			carry[0] -= count;
+			for (int i = 0; i < count; i++)
+			{
+				if (particleSystem.getParticles().size() >= budget)
+				{
+					return;
+				}
+				spawnAt(style, lp.getX() + style.getOffsetX(), lp.getY() + style.getOffsetY(),
+					graphic.getZ() - style.getOffsetZ(), 1f);
+			}
+		}
+		graphicCarries.keySet().retainAll(liveGraphics);
+	}
+
+	/**
+	 * Nearby NPCs for the viewer's capture list: one entry per NPC ID,
+	 * nearest instance, sorted by distance. Client thread.
+	 */
+	private List<ModelViewerFrame.ObjectSighting> npcSightings()
+	{
+		Player player = client.getLocalPlayer();
+		if (player == null)
+		{
+			return List.of();
+		}
+		LocalPoint lp = player.getLocalLocation();
+		int plane = player.getWorldView().getPlane();
+		Map<Integer, ModelViewerFrame.ObjectSighting> best = new HashMap<>();
+		for (NPC npc : client.getTopLevelWorldView().npcs())
+		{
+			if (npc == null || npc.getWorldLocation().getPlane() != plane)
+			{
+				continue;
+			}
+			int dist = npc.getLocalLocation().distanceTo(lp) / 128;
+			if (dist > 12)
+			{
+				continue;
+			}
+			ModelViewerFrame.ObjectSighting current = best.get(npc.getId());
+			if (current != null && current.distanceTiles <= dist)
+			{
+				continue;
+			}
+			String name = npc.getName();
+			if (name == null || name.isEmpty() || name.equals("null"))
+			{
+				continue;
+			}
+			best.put(npc.getId(), new ModelViewerFrame.ObjectSighting(npc.getId(), name, dist));
+		}
+		List<ModelViewerFrame.ObjectSighting> out = new ArrayList<>(best.values());
+		out.sort((a, b) -> Integer.compare(a.distanceTiles, b.distanceTiles));
+		return out.size() > 30 ? new ArrayList<>(out.subList(0, 30)) : out;
+	}
+
+	/**
+	 * Recently seen spot anim / graphics IDs as [id, count, secondsAgo],
+	 * newest first. Client thread.
+	 */
+	private List<int[]> recentGraphicList()
+	{
+		long nowMs = System.currentTimeMillis();
+		List<int[]> out = new ArrayList<>(recentGraphics.size());
+		for (Map.Entry<Integer, long[]> entry : recentGraphics.entrySet())
+		{
+			out.add(new int[]{
+				entry.getKey(),
+				(int) entry.getValue()[0],
+				(int) ((nowMs - entry.getValue()[1]) / 1000)});
+		}
+		out.sort((a, b) -> Integer.compare(a[2], b[2]));
+		return out;
+	}
+
 	// ==================== ModelViewerFrame.Callbacks ====================
 
 	@Override
 	public void refreshSnapshot()
 	{
 		int objectId = viewerObjectId;
+		int npcId = viewerNpcId;
 		clientThread.invokeLater(() ->
 		{
 			if (objectId >= 0)
 			{
 				captureObjectSnapshot(objectId);
+			}
+			else if (npcId >= 0)
+			{
+				captureNpcSnapshot(npcId);
 			}
 			else
 			{
@@ -2294,17 +2772,33 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	public void loadObject(int objectId)
 	{
 		viewerObjectId = objectId;
+		viewerNpcId = -1;
+		refreshSnapshot();
+	}
+
+	@Override
+	public void loadNpc(int npcId)
+	{
+		viewerNpcId = npcId;
+		viewerObjectId = -1;
 		refreshSnapshot();
 	}
 
 	@Override
 	public void playerViewSelected()
 	{
-		if (viewerObjectId != -1)
+		if (viewerObjectId != -1 || viewerNpcId != -1)
 		{
 			viewerObjectId = -1;
+			viewerNpcId = -1;
 			refreshSnapshot();
 		}
+	}
+
+	@Override
+	public String createGraphicProfile(int graphicId)
+	{
+		return store.ensureGraphicProfile(graphicId, "gfx " + graphicId);
 	}
 
 	/**
@@ -2331,6 +2825,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		}
 		List<int[]> recent = recentProjectileList();
 		List<ModelViewerFrame.ObjectSighting> sightings = nearbySightings();
+		List<ModelViewerFrame.ObjectSighting> npcs = npcSightings();
+		List<int[]> recentGfx = recentGraphicList();
 		SwingUtilities.invokeLater(() ->
 		{
 			viewerSnapshot = snapshot;
@@ -2340,7 +2836,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 					selectedGlobals(snapshot, viewerFrame.getSelectedProfileKey()),
 					profileEntriesBySignature(), wornItems,
 					projectileProfileEntries(), recent,
-					objectProfileEntries(), sightings);
+					objectProfileEntries(), sightings,
+					npcProfileEntries(), npcs,
+					graphicProfileEntries(), recentGfx);
 			}
 		});
 	}
@@ -2380,8 +2878,56 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			return;
 		}
 		ModelSnapshot snapshot = ModelSnapshot.capture(model);
+		pushNonPlayerSnapshot(snapshot);
+	}
+
+	/**
+	 * Capture the nearest instance of this NPC into the viewer, falling back
+	 * to the player when none is in scene. Client thread.
+	 */
+	private void captureNpcSnapshot(int npcId)
+	{
+		Player player = client.getLocalPlayer();
+		if (player == null)
+		{
+			return;
+		}
+		LocalPoint lp = player.getLocalLocation();
+		NPC best = null;
+		int bestDist = Integer.MAX_VALUE;
+		for (NPC npc : client.getTopLevelWorldView().npcs())
+		{
+			if (npc == null || npc.getId() != npcId)
+			{
+				continue;
+			}
+			int dist = npc.getLocalLocation().distanceTo(lp);
+			if (dist < bestDist)
+			{
+				bestDist = dist;
+				best = npc;
+			}
+		}
+		Model model = best == null ? null : best.getModel();
+		if (model == null)
+		{
+			SwingUtilities.invokeLater(() -> viewerNpcId = -1);
+			capturePlayerSnapshot();
+			return;
+		}
+		ModelSnapshot snapshot = ModelSnapshot.capture(model);
+		pushNonPlayerSnapshot(snapshot);
+	}
+
+	/**
+	 * Push an object or NPC snapshot to the viewer. Client thread.
+	 */
+	private void pushNonPlayerSnapshot(ModelSnapshot snapshot)
+	{
 		List<int[]> recent = recentProjectileList();
 		List<ModelViewerFrame.ObjectSighting> sightings = nearbySightings();
+		List<ModelViewerFrame.ObjectSighting> npcs = npcSightings();
+		List<int[]> recentGfx = recentGraphicList();
 		SwingUtilities.invokeLater(() ->
 		{
 			viewerSnapshot = snapshot;
@@ -2391,7 +2937,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 					selectedGlobals(snapshot, viewerFrame.getSelectedProfileKey()),
 					profileEntriesBySignature(), List.of(),
 					projectileProfileEntries(), recent,
-					objectProfileEntries(), sightings);
+					objectProfileEntries(), sightings,
+					npcProfileEntries(), npcs,
+					graphicProfileEntries(), recentGfx);
 			}
 		});
 	}
@@ -2563,6 +3111,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			return store.ensureObjectPieceProfile(piece.getSignature(),
 				"obj " + viewerObjectId + " " + defaultName, viewerObjectId);
 		}
+		if (viewerNpcId >= 0)
+		{
+			return store.ensureNpcPieceProfile(piece.getSignature(),
+				"npc " + viewerNpcId + " " + defaultName, viewerNpcId);
+		}
 		return store.ensureProfileFor(piece.getSignature(), defaultName);
 	}
 
@@ -2596,9 +3149,15 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private boolean matchesViewerContext(EmitterProfile profile)
 	{
-		return viewerObjectId >= 0
-			? profile.isObjectTarget() && profile.getObjectId() == viewerObjectId
-			: EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType());
+		if (viewerObjectId >= 0)
+		{
+			return profile.isObjectTarget() && profile.getObjectId() == viewerObjectId;
+		}
+		if (viewerNpcId >= 0)
+		{
+			return profile.isNpcTarget() && profile.getNpcId() == viewerNpcId;
+		}
+		return EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType());
 	}
 
 	/**
@@ -2616,7 +3175,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			viewerFrame.selectProfileOnNextSnapshot(selectProfileKey);
 		}
 		viewerFrame.refreshRows(profileEntriesBySignature(), projectileProfileEntries(),
-			objectProfileEntries());
+			objectProfileEntries(), npcProfileEntries(), graphicProfileEntries());
 	}
 
 	private void refreshViewerMarkers()
@@ -2732,21 +3291,58 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		return out;
 	}
 
+	private List<ModelViewerFrame.ProfileEntry> npcProfileEntries()
+	{
+		List<ModelViewerFrame.ProfileEntry> out = new ArrayList<>();
+		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (profile.isNpcTarget())
+			{
+				out.add(new ModelViewerFrame.ProfileEntry(entry.getKey(),
+					profile.getName() + " [npc " + profile.getNpcId() + "]", false));
+			}
+		}
+		return out;
+	}
+
+	private List<ModelViewerFrame.ProfileEntry> graphicProfileEntries()
+	{
+		List<ModelViewerFrame.ProfileEntry> out = new ArrayList<>();
+		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (profile.isGraphicTarget())
+			{
+				out.add(new ModelViewerFrame.ProfileEntry(entry.getKey(),
+					profile.getName() + " [gfx " + profile.getGraphicId() + "]", false));
+			}
+		}
+		return out;
+	}
+
 	/**
 	 * Open the vertex picker with this profile selected, if its piece is on
 	 * the current model. EDT only.
 	 */
 	private void editProfile(String profileKey)
 	{
-		// Object profiles edit against their object's model, not the player's
+		// Object and NPC profiles edit against their own model, not the player's
 		EmitterProfile profile = store.snapshotAll().get(profileKey);
 		if (profile != null && profile.isObjectTarget())
 		{
 			viewerObjectId = profile.getObjectId();
+			viewerNpcId = -1;
 		}
-		else if (profile != null && !profile.isProjectileTarget())
+		else if (profile != null && profile.isNpcTarget())
+		{
+			viewerNpcId = profile.getNpcId();
+			viewerObjectId = -1;
+		}
+		else if (profile != null && !profile.isProjectileTarget() && !profile.isGraphicTarget())
 		{
 			viewerObjectId = -1;
+			viewerNpcId = -1;
 		}
 		openViewer();
 		if (viewerFrame != null)

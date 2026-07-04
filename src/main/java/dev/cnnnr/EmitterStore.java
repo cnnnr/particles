@@ -200,6 +200,8 @@ class EmitterStore
 		copy.setName(source.getName() + " copy");
 		String base = source.isProjectileTarget()
 			? "proj:" + source.getProjectileId()
+			: source.isGraphicTarget()
+			? "gfx:" + source.getGraphicId()
 			: source.getSignature();
 		String key = freeKey(base);
 		profiles.put(key, copy);
@@ -227,6 +229,55 @@ class EmitterStore
 		profile.setSignature(signature);
 		profile.setObjectId(objectId);
 		String key = freeKey(signature + "@obj" + objectId);
+		profiles.put(key, profile);
+		save();
+		return key;
+	}
+
+	/**
+	 * @return the key of an existing NPC profile for this piece signature on
+	 * this NPC ID, or a newly created one
+	 */
+	synchronized String ensureNpcPieceProfile(String signature, String defaultName, int npcId)
+	{
+		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (profile.isNpcTarget() && profile.getNpcId() == npcId
+				&& signature.equals(profile.getSignature()))
+			{
+				return entry.getKey();
+			}
+		}
+		EmitterProfile profile = new EmitterProfile(defaultName);
+		profile.setTargetType(EmitterProfile.TARGET_NPC);
+		profile.setSignature(signature);
+		profile.setNpcId(npcId);
+		String key = freeKey(signature + "@npc" + npcId);
+		profiles.put(key, profile);
+		save();
+		return key;
+	}
+
+	/**
+	 * @return the key of an existing graphic profile for this spot anim ID,
+	 * or a newly created one
+	 */
+	synchronized String ensureGraphicProfile(int graphicId, String defaultName)
+	{
+		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (profile.isGraphicTarget() && profile.getGraphicId() == graphicId)
+			{
+				return entry.getKey();
+			}
+		}
+		EmitterProfile profile = new EmitterProfile(defaultName);
+		profile.setTargetType(EmitterProfile.TARGET_GRAPHIC);
+		profile.setGraphicId(graphicId);
+		profile.setRiseSpeed(20);
+		String key = freeKey("gfx:" + graphicId);
 		profiles.put(key, profile);
 		save();
 		return key;
