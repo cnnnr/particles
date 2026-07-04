@@ -25,6 +25,8 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.Model;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
@@ -312,6 +314,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	private int lastActionAnimation = -1;
 	@Getter
 	private String statsLine = "";
+	/**
+	 * Stack-oracle diagnostic line for the hovered tile; empty outside
+	 * developer mode. See {@link #updateStackOracle}.
+	 */
+	@Getter
+	private String oracleLine = "";
+	private String lastOracleDump = "";
 
 	@Override
 	protected void startUp() throws Exception
@@ -599,10 +608,142 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 		}
 
+		updateStackOracle(level);
 		emitProjectiles(dt);
 		particleSystem.update(dt, deathStats);
 		renderer.sync(particleSystem.getParticles(), anchorWorldView, anchorLevel);
 		updateStats(now);
+	}
+
+	/**
+	 * Dev diagnostic: the hover menu lists every player in a stack and the
+	 * engine puts the DRAWN player's entry on top - ground truth for the
+	 * stack winner that no API exposes, and that seven falsified
+	 * reconstruction attempts never had. While hovering a stack, show the
+	 * oracle winner next to the gate's decision and the lowest/highest
+	 * menu-index candidates, and log one full state dump per distinct
+	 * situation so the true precedence rule can be mined offline.
+	 */
+	private void updateStackOracle(int level)
+	{
+		oracleLine = "";
+		if (!developerMode || !config.showAnchor())
+		{
+			return;
+		}
+
+		// Menus build bottom-up: the last vanilla player entry renders as the
+		// top row. Only vanilla options - plugin-injected entries would lie.
+		MenuEntry[] entries = client.getMenuEntries();
+		Player winner = null;
+		Map<Player, Integer> menuIndices = new HashMap<>();
+		for (MenuEntry entry : entries)
+		{
+			Player p = entry.getPlayer();
+			if (p != null && isVanillaPlayerOption(entry.getType()))
+			{
+				menuIndices.put(p, entry.getIdentifier());
+				winner = p;
+			}
+		}
+		if (winner == null)
+		{
+			return;
+		}
+
+		long key = tileKey(winner);
+		List<Player> stack = new ArrayList<>();
+		for (Player p : client.getTopLevelWorldView().players())
+		{
+			if (p != null && p.getWorldLocation().getPlane() == level
+				&& isCentered(p) && tileKey(p) == key)
+			{
+				stack.add(p);
+			}
+		}
+		if (stack.size() < 2)
+		{
+			return;
+		}
+
+		String gate;
+		if (contestedTiles.contains(key))
+		{
+			gate = "silent-contested";
+		}
+		else if (npcClaimedTiles.contains(key))
+		{
+			gate = "silent-npc";
+		}
+		else
+		{
+			Player owner = tileOwners.get(key);
+			gate = owner == null ? "none" : owner.getName();
+		}
+
+		Player lo = null;
+		Player hi = null;
+		for (Player p : stack)
+		{
+			Integer idx = menuIndices.get(p);
+			if (idx == null)
+			{
+				continue;
+			}
+			if (lo == null || idx < menuIndices.get(lo))
+			{
+				lo = p;
+			}
+			if (hi == null || idx > menuIndices.get(hi))
+			{
+				hi = p;
+			}
+		}
+
+		oracleLine = "stack " + stack.size()
+			+ " | drawn " + winner.getName() + (isCentered(winner) ? "" : " (moving)")
+			+ " | gate " + gate
+			+ " | loIdx " + (lo == null ? "-" : lo.getName())
+			+ " | hiIdx " + (hi == null ? "-" : hi.getName());
+
+		// One dump per distinct situation, with everything a candidate
+		// precedence rule could depend on
+		StringBuilder dump = new StringBuilder("stack oracle: drawn=")
+			.append(winner.getName()).append('#').append(menuIndices.getOrDefault(winner, -1))
+			.append(" gate=").append(gate);
+		for (Player p : stack)
+		{
+			LocalPoint lp = p.getLocalLocation();
+			dump.append(" | ").append(p.getName())
+				.append('#').append(menuIndices.getOrDefault(p, -1))
+				.append(" lp=").append(lp.getX()).append(',').append(lp.getY())
+				.append(p == client.getLocalPlayer() ? " LOCAL" : "")
+				.append(p.getInteracting() != null ? " ->" + p.getInteracting().getName() : "");
+		}
+		String text = dump.toString();
+		if (!text.equals(lastOracleDump))
+		{
+			lastOracleDump = text;
+			log.debug(text);
+		}
+	}
+
+	private static boolean isVanillaPlayerOption(MenuAction action)
+	{
+		switch (action)
+		{
+			case PLAYER_FIRST_OPTION:
+			case PLAYER_SECOND_OPTION:
+			case PLAYER_THIRD_OPTION:
+			case PLAYER_FOURTH_OPTION:
+			case PLAYER_FIFTH_OPTION:
+			case PLAYER_SIXTH_OPTION:
+			case PLAYER_SEVENTH_OPTION:
+			case PLAYER_EIGHTH_OPTION:
+				return true;
+			default:
+				return false;
+		}
 	}
 
 	private void onParticleDeath(Particle p)

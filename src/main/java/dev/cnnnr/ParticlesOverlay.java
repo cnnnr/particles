@@ -53,6 +53,16 @@ class ParticlesOverlay extends Overlay
 			graphics.drawString(stats, 10, 40);
 		}
 
+		// Stack-winner oracle for the hovered tile (developer mode only)
+		String oracle = plugin.getOracleLine();
+		if (!oracle.isEmpty())
+		{
+			graphics.setColor(Color.BLACK);
+			graphics.drawString(oracle, 11, 56);
+			graphics.setColor(Color.ORANGE);
+			graphics.drawString(oracle, 10, 55);
+		}
+
 		if (plugin.getAnchorCount() == 0)
 		{
 			return null;
