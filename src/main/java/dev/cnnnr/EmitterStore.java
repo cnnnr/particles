@@ -260,6 +260,46 @@ class EmitterStore
 	}
 
 	/**
+	 * The graphic profile for this piece signature on this spot anim ID. A
+	 * point-based profile (no signature yet) for the same ID is upgraded in
+	 * place rather than duplicated.
+	 */
+	synchronized String ensureGraphicPieceProfile(String signature, String defaultName, int graphicId)
+	{
+		String pointKey = null;
+		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (!profile.isGraphicTarget() || profile.getGraphicId() != graphicId)
+			{
+				continue;
+			}
+			if (signature.equals(profile.getSignature()))
+			{
+				return entry.getKey();
+			}
+			if (profile.getSignature() == null && pointKey == null)
+			{
+				pointKey = entry.getKey();
+			}
+		}
+		if (pointKey != null)
+		{
+			profiles.get(pointKey).setSignature(signature);
+			save();
+			return pointKey;
+		}
+		EmitterProfile profile = new EmitterProfile(defaultName);
+		profile.setTargetType(EmitterProfile.TARGET_GRAPHIC);
+		profile.setGraphicId(graphicId);
+		profile.setSignature(signature);
+		String key = freeKey(signature + "@gfx" + graphicId);
+		profiles.put(key, profile);
+		save();
+		return key;
+	}
+
+	/**
 	 * @return the key of an existing graphic profile for this spot anim ID,
 	 * or a newly created one
 	 */

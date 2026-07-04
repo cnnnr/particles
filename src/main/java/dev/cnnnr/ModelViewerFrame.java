@@ -82,6 +82,12 @@ class ModelViewerFrame extends JFrame
 		void loadNpc(int npcId);
 
 		/**
+		 * Capture a live instance of this spot anim / graphic into the
+		 * viewer for vertex picking.
+		 */
+		void loadGraphic(int graphicId);
+
+		/**
 		 * The user manually returned to the model view; drop any object
 		 * context and show the player again.
 		 */
@@ -316,12 +322,18 @@ class ModelViewerFrame extends JFrame
 		npcLoadPanel.add(loadNpc, BorderLayout.EAST);
 
 		JButton addGraphic = new JButton("Add");
-		addGraphic.setToolTipText("Create a profile for the typed spot anim ID, or the selected seen graphic");
+		addGraphic.setToolTipText("Create a point-based profile for the typed spot anim ID, or the selected seen graphic");
 		addGraphic.addActionListener(e -> addGraphicProfile());
+		JButton loadGraphic = new JButton("Load");
+		loadGraphic.setToolTipText("Capture a live instance of the graphic into the viewer to pick emitter vertices - the graphic must be active somewhere in view");
+		loadGraphic.addActionListener(e -> loadSelectedGraphic());
 		graphicIdField.setToolTipText("Spot anim / graphics ID; leave blank to use the selected seen row");
+		JPanel graphicButtons = new JPanel(new GridLayout(1, 0, 4, 0));
+		graphicButtons.add(addGraphic);
+		graphicButtons.add(loadGraphic);
 		graphicAddPanel.add(new JLabel("ID "), BorderLayout.WEST);
 		graphicAddPanel.add(graphicIdField, BorderLayout.CENTER);
-		graphicAddPanel.add(addGraphic, BorderLayout.EAST);
+		graphicAddPanel.add(graphicButtons, BorderLayout.EAST);
 
 		JCheckBox labelAll = new JCheckBox("Label emitter vertices");
 		labelAll.addActionListener(e -> viewport.setLabelAll(labelAll.isSelected()));
@@ -380,6 +392,17 @@ class ModelViewerFrame extends JFrame
 		}
 		pendingSelection = callbacks.createGraphicProfile(id);
 		callbacks.refreshSnapshot();
+	}
+
+	private void loadSelectedGraphic()
+	{
+		int id = parseIdOrSelection(graphicIdField);
+		if (id < 0)
+		{
+			return;
+		}
+		setMode(0);
+		callbacks.loadGraphic(id);
 	}
 
 	/**

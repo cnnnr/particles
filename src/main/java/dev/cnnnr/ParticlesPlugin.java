@@ -268,6 +268,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		float[] anchorZs = new float[0];
 		int anchorCount;
 		int revision = -1;
+		boolean loggedResolveMiss;
 	}
 
 	/**
@@ -290,10 +291,34 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	private Set<Integer> profiledNpcIds = Set.of();
 
 	/**
-	 * Enabled graphic profiles by spot anim ID: point emission at graphics
-	 * objects and on actors playing the spot anim. Client thread.
+	 * One enabled graphic profile resolved for emission: point-based when no
+	 * vertices were picked, otherwise anchored to the spot anim model's
+	 * piece vertices. Graphic models are single cache models, so the global
+	 * indices resolved from the first instance hold for every instance.
 	 */
-	private final Map<Integer, ParticleStyle> graphicStyles = new HashMap<>();
+	private static class GraphicEmitter
+	{
+		final ParticleStyle style;
+		@Nullable
+		final String signature;
+		final int[] locals;
+		@Nullable
+		int[] globals;
+		boolean resolveTried;
+
+		GraphicEmitter(ParticleStyle style, @Nullable String signature, int[] locals)
+		{
+			this.style = style;
+			this.signature = signature;
+			this.locals = locals;
+		}
+	}
+
+	/**
+	 * Enabled graphic profiles by spot anim ID: emission at graphics objects
+	 * and on actors playing the spot anim. Client thread.
+	 */
+	private final Map<Integer, List<GraphicEmitter>> graphicEmitters = new HashMap<>();
 	/**
 	 * Rate carries per live graphics object, swept against the live set.
 	 */
@@ -343,6 +368,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private int viewerObjectId = -1;
 	private int viewerNpcId = -1;
+	private int viewerGraphicId = -1;
 
 	/**
 	 * Piece signatures present on the currently worn model; written on the
@@ -2121,13 +2147,15 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	{
 		oe.revision = revision;
 		oe.emitters.clear();
+		Map<String, EmitterProfile> profiles = store.snapshotAll();
 		Model model = objectModel(object);
 		if (model == null)
 		{
+			logResolveMissOnce(oe, object, profiles, null);
 			return;
 		}
 		ModelSnapshot snapshot = ModelSnapshot.capture(model);
-		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
+		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
 		{
 			EmitterProfile profile = entry.getValue();
 			if (!profile.isObjectTarget() || profile.getObjectId() != object.getId()
@@ -2172,6 +2200,66 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				}
 			}
 		}
+		if (oe.emitters.isEmpty())
+		{
+			logResolveMissOnce(oe, object, profiles, model);
+		}
+	}
+
+	/**
+	 * Hypothesis probe for placements matching nothing despite a profiled
+	 * ID: if the dump shows the same NvMf counts with a different hash
+	 * suffix, the placement uses a mirrored model whose reversed winding
+	 * changes the topology hash. Once per instance, debug level.
+	 */
+	private void logResolveMissOnce(ObjectEmitters oe, TileObject object,
+		Map<String, EmitterProfile> profiles, @Nullable Model primary)
+	{
+		if (oe.loggedResolveMiss || !log.isDebugEnabled())
+		{
+			return;
+		}
+		oe.loggedResolveMiss = true;
+		StringBuilder sb = new StringBuilder("object resolve miss: id=").append(object.getId());
+		appendPieceSignatures(sb, " primary=", primary);
+		appendPieceSignatures(sb, " secondary=", secondaryModel(object));
+		sb.append(" profiles=");
+		for (EmitterProfile profile : profiles.values())
+		{
+			if (profile.isObjectTarget() && profile.getObjectId() == object.getId())
+			{
+				sb.append(profile.getSignature()).append('(').append(profile.getName()).append(") ");
+			}
+		}
+		log.debug(sb.toString());
+	}
+
+	private static void appendPieceSignatures(StringBuilder sb, String label, @Nullable Model model)
+	{
+		sb.append(label);
+		if (model == null)
+		{
+			sb.append("null");
+			return;
+		}
+		for (ModelSnapshot.Piece piece : ModelSnapshot.capture(model).getPieces())
+		{
+			sb.append(piece.getSignature()).append(' ');
+		}
+	}
+
+	@Nullable
+	private static Model secondaryModel(TileObject object)
+	{
+		if (object instanceof WallObject)
+		{
+			return modelOf(((WallObject) object).getRenderable2());
+		}
+		if (object instanceof DecorativeObject)
+		{
+			return modelOf(((DecorativeObject) object).getRenderable2());
+		}
+		return null;
 	}
 
 	private void updateObjectAnchors(ObjectEmitters oe, TileObject object, boolean markers)
@@ -2462,7 +2550,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 	private void rebuildGraphicStyles()
 	{
-		graphicStyles.clear();
+		graphicEmitters.clear();
 		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
 		{
 			EmitterProfile profile = entry.getValue();
@@ -2472,11 +2560,80 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				continue;
 			}
 			ParticleStyle style = renderer.getStyle(entry.getKey());
-			if (style != null)
+			if (style == null)
 			{
-				graphicStyles.put(profile.getGraphicId(), style);
+				continue;
+			}
+			int[] locals = new int[profile.getVertices().size()];
+			int i = 0;
+			for (int local : profile.getVertices())
+			{
+				locals[i++] = local;
+			}
+			graphicEmitters.computeIfAbsent(profile.getGraphicId(), k -> new ArrayList<>())
+				.add(new GraphicEmitter(style, profile.getSignature(), locals));
+		}
+	}
+
+	/**
+	 * Map a vertex-based graphic emitter onto the spot anim's model, once
+	 * per rebuild. Attaches across every matching piece like the other
+	 * vertex targets.
+	 */
+	private static void resolveGraphic(GraphicEmitter ge, Model model)
+	{
+		ge.resolveTried = true;
+		if (ge.signature == null || ge.locals.length == 0)
+		{
+			return;
+		}
+		List<Integer> globals = new ArrayList<>();
+		for (ModelSnapshot.Piece piece : ModelSnapshot.capture(model).getPieces())
+		{
+			if (!piece.getSignature().equals(ge.signature))
+			{
+				continue;
+			}
+			for (int local : ge.locals)
+			{
+				if (local >= 0 && local < piece.getVertices().length)
+				{
+					globals.add(piece.getVertices()[local]);
+				}
 			}
 		}
+		if (!globals.isEmpty())
+		{
+			ge.globals = new int[globals.size()];
+			for (int i = 0; i < ge.globals.length; i++)
+			{
+				ge.globals[i] = globals.get(i);
+			}
+		}
+	}
+
+	/**
+	 * One spawn for a graphic emitter: on a random attached vertex when the
+	 * profile picked some (falling back to the base point if the piece never
+	 * resolved), else at the base point.
+	 */
+	private void spawnGraphic(GraphicEmitter ge, @Nullable Model model, float baseX, float baseY, float baseZ)
+	{
+		ParticleStyle style = ge.style;
+		float x = baseX + style.getOffsetX();
+		float y = baseY + style.getOffsetY();
+		float z = baseZ - style.getOffsetZ();
+		if (model != null && ge.globals != null)
+		{
+			int g = ge.globals[random.nextInt(ge.globals.length)];
+			if (g >= 0 && g < model.getVerticesCount())
+			{
+				x += model.getVerticesX()[g];
+				y += model.getVerticesZ()[g];
+				z += model.getVerticesY()[g];
+			}
+		}
+		spawnAt(style, x, y, z, 1f);
 	}
 
 	/**
@@ -2585,18 +2742,18 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private void emitActorSpotAnims(float dt, PlayerEmitters pe, Actor actor)
 	{
-		if (graphicStyles.isEmpty())
+		if (graphicEmitters.isEmpty())
 		{
 			return;
 		}
 		int budget = config.maxParticles();
 		float densityScale = config.density().getFactor();
 		LocalPoint lp = actor.getLocalLocation();
-		int baseZ = Integer.MIN_VALUE;
+		int actorBase = Integer.MIN_VALUE;
 		for (ActorSpotAnim spotAnim : actor.getSpotAnims())
 		{
-			ParticleStyle style = graphicStyles.get(spotAnim.getId());
-			if (style == null)
+			List<GraphicEmitter> list = graphicEmitters.get(spotAnim.getId());
+			if (list == null)
 			{
 				continue;
 			}
@@ -2604,29 +2761,46 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				pe.spotAnimCarries = new HashMap<>();
 			}
-			double[] carry = pe.spotAnimCarries.computeIfAbsent(spotAnim.getId(), k -> new double[1]);
-			float sustainable = budget / style.getLifetimeSec() * 0.95f;
-			carry[0] += Math.min(style.getParticlesPerSecond() * densityScale, sustainable) * dt;
-			int count = (int) carry[0];
-			carry[0] -= count;
-			if (count == 0)
+			double[] carries = pe.spotAnimCarries.get(spotAnim.getId());
+			if (carries == null || carries.length != list.size())
 			{
-				continue;
+				carries = new double[list.size()];
+				pe.spotAnimCarries.put(spotAnim.getId(), carries);
 			}
-			if (baseZ == Integer.MIN_VALUE)
+			Model model = null;
+			for (int gi = 0; gi < list.size(); gi++)
 			{
-				baseZ = Perspective.getFootprintTileHeight(client, lp, anchorLevel, actor.getFootprintSize())
-					- actor.getAnimationHeightOffset();
-			}
-			float z = baseZ - spotAnim.getHeight();
-			for (int i = 0; i < count; i++)
-			{
-				if (particleSystem.getParticles().size() >= budget)
+				GraphicEmitter ge = list.get(gi);
+				float sustainable = budget / ge.style.getLifetimeSec() * 0.95f;
+				carries[gi] += Math.min(ge.style.getParticlesPerSecond() * densityScale, sustainable) * dt;
+				int count = (int) carries[gi];
+				carries[gi] -= count;
+				if (count == 0)
 				{
-					return;
+					continue;
 				}
-				spawnAt(style, lp.getX() + style.getOffsetX(), lp.getY() + style.getOffsetY(),
-					z - style.getOffsetZ(), 1f);
+				if (model == null)
+				{
+					model = spotAnim.getModel();
+				}
+				if (!ge.resolveTried && model != null)
+				{
+					resolveGraphic(ge, model);
+				}
+				if (actorBase == Integer.MIN_VALUE)
+				{
+					actorBase = Perspective.getFootprintTileHeight(client, lp, anchorLevel, actor.getFootprintSize())
+						- actor.getAnimationHeightOffset();
+				}
+				float z = actorBase - spotAnim.getHeight();
+				for (int i = 0; i < count; i++)
+				{
+					if (particleSystem.getParticles().size() >= budget)
+					{
+						return;
+					}
+					spawnGraphic(ge, model, lp.getX(), lp.getY(), z);
+				}
 			}
 		}
 	}
@@ -2637,7 +2811,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private void emitGraphicsObjects(float dt, int level, int radiusUnits, LocalPoint localLp)
 	{
-		if (graphicStyles.isEmpty())
+		if (graphicEmitters.isEmpty())
 		{
 			if (!graphicCarries.isEmpty())
 			{
@@ -2654,8 +2828,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				continue;
 			}
-			ParticleStyle style = graphicStyles.get(graphic.getId());
-			if (style == null)
+			List<GraphicEmitter> list = graphicEmitters.get(graphic.getId());
+			if (list == null)
 			{
 				continue;
 			}
@@ -2665,19 +2839,32 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				continue;
 			}
-			double[] carry = graphicCarries.computeIfAbsent(graphic, k -> new double[1]);
-			float sustainable = budget / style.getLifetimeSec() * 0.95f;
-			carry[0] += Math.min(style.getParticlesPerSecond() * densityScale, sustainable) * dt;
-			int count = (int) carry[0];
-			carry[0] -= count;
-			for (int i = 0; i < count; i++)
+			double[] carries = graphicCarries.get(graphic);
+			if (carries == null || carries.length != list.size())
 			{
-				if (particleSystem.getParticles().size() >= budget)
+				carries = new double[list.size()];
+				graphicCarries.put(graphic, carries);
+			}
+			Model model = graphic.getModel();
+			for (int gi = 0; gi < list.size(); gi++)
+			{
+				GraphicEmitter ge = list.get(gi);
+				if (!ge.resolveTried && model != null)
 				{
-					return;
+					resolveGraphic(ge, model);
 				}
-				spawnAt(style, lp.getX() + style.getOffsetX(), lp.getY() + style.getOffsetY(),
-					graphic.getZ() - style.getOffsetZ(), 1f);
+				float sustainable = budget / ge.style.getLifetimeSec() * 0.95f;
+				carries[gi] += Math.min(ge.style.getParticlesPerSecond() * densityScale, sustainable) * dt;
+				int count = (int) carries[gi];
+				carries[gi] -= count;
+				for (int i = 0; i < count; i++)
+				{
+					if (particleSystem.getParticles().size() >= budget)
+					{
+						return;
+					}
+					spawnGraphic(ge, model, lp.getX(), lp.getY(), graphic.getZ());
+				}
 			}
 		}
 		graphicCarries.keySet().retainAll(liveGraphics);
@@ -2751,6 +2938,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	{
 		int objectId = viewerObjectId;
 		int npcId = viewerNpcId;
+		int graphicId = viewerGraphicId;
 		clientThread.invokeLater(() ->
 		{
 			if (objectId >= 0)
@@ -2760,6 +2948,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			else if (npcId >= 0)
 			{
 				captureNpcSnapshot(npcId);
+			}
+			else if (graphicId >= 0)
+			{
+				captureGraphicSnapshot(graphicId);
 			}
 			else
 			{
@@ -2773,6 +2965,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	{
 		viewerObjectId = objectId;
 		viewerNpcId = -1;
+		viewerGraphicId = -1;
 		refreshSnapshot();
 	}
 
@@ -2781,16 +2974,27 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	{
 		viewerNpcId = npcId;
 		viewerObjectId = -1;
+		viewerGraphicId = -1;
+		refreshSnapshot();
+	}
+
+	@Override
+	public void loadGraphic(int graphicId)
+	{
+		viewerGraphicId = graphicId;
+		viewerObjectId = -1;
+		viewerNpcId = -1;
 		refreshSnapshot();
 	}
 
 	@Override
 	public void playerViewSelected()
 	{
-		if (viewerObjectId != -1 || viewerNpcId != -1)
+		if (viewerObjectId != -1 || viewerNpcId != -1 || viewerGraphicId != -1)
 		{
 			viewerObjectId = -1;
 			viewerNpcId = -1;
+			viewerGraphicId = -1;
 			refreshSnapshot();
 		}
 	}
@@ -2917,6 +3121,66 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		}
 		ModelSnapshot snapshot = ModelSnapshot.capture(model);
 		pushNonPlayerSnapshot(snapshot);
+	}
+
+	/**
+	 * Capture a live instance of this spot anim into the viewer - a graphics
+	 * object or an actor playing it - falling back to the player when none
+	 * is active. Client thread.
+	 */
+	private void captureGraphicSnapshot(int graphicId)
+	{
+		Model model = null;
+		for (GraphicsObject graphic : client.getTopLevelWorldView().getGraphicsObjects())
+		{
+			if (!graphic.finished() && graphic.getId() == graphicId)
+			{
+				model = graphic.getModel();
+				break;
+			}
+		}
+		if (model == null)
+		{
+			for (Player p : client.getTopLevelWorldView().players())
+			{
+				model = p == null ? null : spotAnimModel(p, graphicId);
+				if (model != null)
+				{
+					break;
+				}
+			}
+		}
+		if (model == null)
+		{
+			for (NPC npc : client.getTopLevelWorldView().npcs())
+			{
+				model = npc == null ? null : spotAnimModel(npc, graphicId);
+				if (model != null)
+				{
+					break;
+				}
+			}
+		}
+		if (model == null)
+		{
+			SwingUtilities.invokeLater(() -> viewerGraphicId = -1);
+			capturePlayerSnapshot();
+			return;
+		}
+		pushNonPlayerSnapshot(ModelSnapshot.capture(model));
+	}
+
+	@Nullable
+	private static Model spotAnimModel(Actor actor, int graphicId)
+	{
+		for (ActorSpotAnim spotAnim : actor.getSpotAnims())
+		{
+			if (spotAnim.getId() == graphicId)
+			{
+				return spotAnim.getModel();
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -3116,6 +3380,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			return store.ensureNpcPieceProfile(piece.getSignature(),
 				"npc " + viewerNpcId + " " + defaultName, viewerNpcId);
 		}
+		if (viewerGraphicId >= 0)
+		{
+			return store.ensureGraphicPieceProfile(piece.getSignature(),
+				"gfx " + viewerGraphicId + " " + defaultName, viewerGraphicId);
+		}
 		return store.ensureProfileFor(piece.getSignature(), defaultName);
 	}
 
@@ -3156,6 +3425,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (viewerNpcId >= 0)
 		{
 			return profile.isNpcTarget() && profile.getNpcId() == viewerNpcId;
+		}
+		if (viewerGraphicId >= 0)
+		{
+			return profile.isGraphicTarget() && profile.getGraphicId() == viewerGraphicId;
 		}
 		return EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType());
 	}
@@ -3333,16 +3606,19 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			viewerObjectId = profile.getObjectId();
 			viewerNpcId = -1;
+			viewerGraphicId = -1;
 		}
 		else if (profile != null && profile.isNpcTarget())
 		{
 			viewerNpcId = profile.getNpcId();
 			viewerObjectId = -1;
+			viewerGraphicId = -1;
 		}
 		else if (profile != null && !profile.isProjectileTarget() && !profile.isGraphicTarget())
 		{
 			viewerObjectId = -1;
 			viewerNpcId = -1;
+			viewerGraphicId = -1;
 		}
 		openViewer();
 		if (viewerFrame != null)
