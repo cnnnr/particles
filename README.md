@@ -1,26 +1,24 @@
 # Particles
 
-Cosmetic 3D particle effects for your gear.
-
-**Author:** Proven &nbsp;·&nbsp; **Version:** 1.0.0
+**Version 1.0.0**
 
 ## What it does
 
-Particles attaches soft, ambient particle effects to equipment — embers drifting off a max cape hem, a glow rising from a halo, a shimmer on a crystal crown. The particles are real objects in the 3D world: they sit on the gear itself, follow you while you move and animate, and are drawn with proper depth like everything else in the scene.
+Cosmetic 3D particle effects for your gear.
 
-Effects apply to everyone: any player in view wearing supported gear gets their particles, not just you.
+Effects are predefined per item rather than user-customized, so particles stay cohesive and consistent for everyone.
 
 ## Supported gear
 
-The plugin ships with a preset pack covering popular items, including:
+The plugin includes a preset pack covering popular items, including:
 
-- Max capes (all variants), Infernal max cape, Fire max cape, Dizana's max cape
+- Max capes
 - All halos
-- Crystal crowns (all colors)
-- Ancient sceptres (all elements)
+- Crystal crowns
+- Ancient sceptres
 - Scythe of vitur, Tumeken's shadow, nightmare staves, dragonfire shield
 
-Each preset can be toggled individually from the sidebar, and the list is searchable.
+Each preset can be toggled individually.
 
 ## Settings
 
