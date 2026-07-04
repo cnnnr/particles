@@ -422,11 +422,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		featherDebugPaths.clear();
 
 		// Mirror the engine's stacked-actor dedup exactly (tileLastDrawnActor
-		// in the deobfuscated client): actors standing exactly at tile center
-		// claim their tile in draw order - local player, then the local
-		// player's player combat target, then size-1 NPCs, then players by
-		// ascending index - and only the claimant is drawn. Moving actors and
-		// actors with an active spot anim bypass the dedup and always draw.
+		// in the deobfuscated client, tileLastOccupiedCycle in the 2004
+		// client): actors standing exactly at tile center claim their tile in
+		// draw order - local player, then the local player's player combat
+		// target, then size-1 NPCs, then players by ascending index - and
+		// only the claimant is drawn. Moving actors bypass the dedup.
 		playerStamp++;
 		tileOwners.clear();
 		npcClaimedTiles.clear();
@@ -1040,16 +1040,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	}
 
 	/**
-	 * Actors the engine draws regardless of tile claims: mid-movement, or
-	 * carrying an active spot anim (which uses a separate draw path).
+	 * Actors the engine draws regardless of tile claims: only those not
+	 * standing exactly at a tile center (i.e. mid-movement). Verified against
+	 * the 2004 client: the other bypass is the rare player-to-scenery
+	 * transmog (locModel), not spot anims.
 	 */
 	private static boolean drawsUnconditionally(Player player)
 	{
-		if (!isCentered(player))
-		{
-			return true;
-		}
-		return player.getSpotAnims().iterator().hasNext();
+		return !isCentered(player);
 	}
 
 	private static long tileKey(Player player)
