@@ -401,8 +401,23 @@ class ModelViewerFrame extends JFrame
 		{
 			return;
 		}
-		setMode(0);
+		// Short-lived gfx are usually gone before Load can be clicked; the
+		// plugin arms a capture and calls showModelView when the mesh lands
+		editorHint.setText("Waiting for graphic " + id + " - trigger it in game");
 		callbacks.loadGraphic(id);
+	}
+
+	/**
+	 * Jump to the model view; called by the plugin when a graphic capture
+	 * lands. EDT only.
+	 */
+	void showModelView()
+	{
+		setMode(0);
+		if (snapshot != null)
+		{
+			rebuildRows();
+		}
 	}
 
 	/**

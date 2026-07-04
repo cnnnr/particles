@@ -329,6 +329,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * id -> [count, lastSeenMs].
 	 */
 	private final Map<Integer, long[]> recentGraphics = new LinkedHashMap<>();
+	/**
+	 * Graphic ID armed for deferred viewer capture: spell gfx are gone
+	 * before Load can be clicked, so the mesh is grabbed the next time the
+	 * graphic plays. -1 when idle. Client thread.
+	 */
+	private int pendingGraphicCapture = -1;
 
 	// Debug marker aggregate across all players, read by the overlay; only
 	// filled while markers are shown. Client thread.
@@ -523,6 +529,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			npcEmitters.clear();
 			graphicCarries.clear();
 			recentGraphics.clear();
+			pendingGraphicCapture = -1;
 			projectileTrackers.clear();
 			activeProjectileProfiles.clear();
 			recentProjectiles.clear();
@@ -914,6 +921,15 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			if (peIt.next().stamp != playerStamp)
 			{
 				peIt.remove();
+			}
+		}
+
+		if (pendingGraphicCapture >= 0)
+		{
+			Model pendingModel = findGraphicModel(pendingGraphicCapture);
+			if (pendingModel != null)
+			{
+				pushGraphicSnapshot(pendingModel);
 			}
 		}
 
@@ -3017,6 +3033,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private void capturePlayerSnapshot()
 	{
+		pendingGraphicCapture = -1;
 		Player player = client.getLocalPlayer();
 		if (player == null)
 		{
@@ -3061,6 +3078,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private void captureObjectSnapshot(int objectId)
 	{
+		pendingGraphicCapture = -1;
 		Player player = client.getLocalPlayer();
 		if (player == null)
 		{
@@ -3099,6 +3117,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private void captureNpcSnapshot(int npcId)
 	{
+		pendingGraphicCapture = -1;
 		Player player = client.getLocalPlayer();
 		if (player == null)
 		{
@@ -3138,44 +3157,60 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private void captureGraphicSnapshot(int graphicId)
 	{
-		Model model = null;
+		Model model = findGraphicModel(graphicId);
+		if (model == null)
+		{
+			// Not playing right now; capture it the moment it next appears
+			pendingGraphicCapture = graphicId;
+			return;
+		}
+		pushGraphicSnapshot(model);
+	}
+
+	@Nullable
+	private Model findGraphicModel(int graphicId)
+	{
 		for (GraphicsObject graphic : client.getTopLevelWorldView().getGraphicsObjects())
 		{
 			if (!graphic.finished() && graphic.getId() == graphicId)
 			{
-				model = graphic.getModel();
-				break;
-			}
-		}
-		if (model == null)
-		{
-			for (Player p : client.getTopLevelWorldView().players())
-			{
-				model = p == null ? null : spotAnimModel(p, graphicId);
+				Model model = graphic.getModel();
 				if (model != null)
 				{
-					break;
+					return model;
 				}
 			}
 		}
-		if (model == null)
+		for (Player p : client.getTopLevelWorldView().players())
 		{
-			for (NPC npc : client.getTopLevelWorldView().npcs())
+			Model model = p == null ? null : spotAnimModel(p, graphicId);
+			if (model != null)
 			{
-				model = npc == null ? null : spotAnimModel(npc, graphicId);
-				if (model != null)
-				{
-					break;
-				}
+				return model;
 			}
 		}
-		if (model == null)
+		for (NPC npc : client.getTopLevelWorldView().npcs())
 		{
-			SwingUtilities.invokeLater(() -> viewerGraphicId = -1);
-			capturePlayerSnapshot();
-			return;
+			Model model = npc == null ? null : spotAnimModel(npc, graphicId);
+			if (model != null)
+			{
+				return model;
+			}
 		}
+		return null;
+	}
+
+	private void pushGraphicSnapshot(Model model)
+	{
+		pendingGraphicCapture = -1;
 		pushNonPlayerSnapshot(ModelSnapshot.capture(model), null);
+		SwingUtilities.invokeLater(() ->
+		{
+			if (viewerFrame != null)
+			{
+				viewerFrame.showModelView();
+			}
+		});
 	}
 
 	@Nullable
