@@ -19,6 +19,7 @@ import java.util.Random;
 import java.util.Set;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
+import javax.inject.Named;
 import javax.swing.SwingUtilities;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -128,6 +129,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 	@Inject
 	private ParticlesOverlay overlay;
+
+	/**
+	 * Authoring tools (vertex picker, profile edit controls) only exist in
+	 * developer mode; shipped users get read-only presets with toggles.
+	 */
+	@Inject
+	@Named("developerMode")
+	private boolean developerMode;
 
 	private final Random random = new Random();
 
@@ -273,7 +282,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 		overlayManager.add(overlay);
 
-		panel = new ParticlesPanel(this::openViewer, store::setEnabled, store::delete,
+		panel = new ParticlesPanel(developerMode, this::openViewer, store::setEnabled, store::delete,
 			this::renameProfile, this::editProfile);
 		navButton = NavigationButton.builder()
 			.tooltip("Particles")

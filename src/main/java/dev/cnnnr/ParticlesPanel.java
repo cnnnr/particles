@@ -2,12 +2,15 @@ package dev.cnnnr;
 
 import java.awt.BorderLayout;
 import java.awt.Component;
+import java.awt.GridLayout;
 import java.awt.Insets;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
-import java.awt.GridLayout;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
@@ -16,97 +19,213 @@ import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import net.runelite.client.ui.PluginPanel;
+import net.runelite.client.ui.components.IconTextField;
+import net.runelite.client.ui.components.materialtabs.MaterialTab;
+import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 
 /**
- * Sidebar panel: opens the vertex picker and lists saved emitter pieces
- * (identified by mesh topology, so they survive gear changes), with
- * enable/disable toggles, rename and delete.
+ * Sidebar panel: lists saved emitter profiles with search and category
+ * filters. Authoring controls (vertex picker, edit/rename/delete) only
+ * appear in developer mode; end users see read-only presets with
+ * enable/disable toggles.
  */
 class ParticlesPanel extends PluginPanel
 {
+	private enum Category
+	{
+		ALL("All"),
+		PLAYER("Player"),
+		PROJECTILE("Proj"),
+		ANIMATED("Anim");
+
+		private final String label;
+
+		Category(String label)
+		{
+			this.label = label;
+		}
+
+		boolean matches(EmitterProfile profile)
+		{
+			switch (this)
+			{
+				case PLAYER:
+					return EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType());
+				case PROJECTILE:
+					return profile.isProjectileTarget();
+				case ANIMATED:
+					return !profile.getAnimationIds().isEmpty();
+				default:
+					return true;
+			}
+		}
+	}
+
+	private final boolean developerMode;
 	private final BiConsumer<String, Boolean> onToggleProfile;
 	private final Consumer<String> onDeleteProfile;
 	private final Consumer<String> onRenameProfile;
 	private final Consumer<String> onEditProfile;
 	private final JPanel profileList = new JPanel();
+	private final IconTextField searchBar = new IconTextField();
 
-	ParticlesPanel(Runnable openViewer, BiConsumer<String, Boolean> onToggleProfile,
+	private Category category = Category.ALL;
+	private Map<String, EmitterProfile> profiles = Map.of();
+	private Set<String> presentSignatures = Set.of();
+
+	ParticlesPanel(boolean developerMode, Runnable openViewer, BiConsumer<String, Boolean> onToggleProfile,
 		Consumer<String> onDeleteProfile, Consumer<String> onRenameProfile, Consumer<String> onEditProfile)
 	{
+		this.developerMode = developerMode;
 		this.onToggleProfile = onToggleProfile;
 		this.onDeleteProfile = onDeleteProfile;
 		this.onRenameProfile = onRenameProfile;
 		this.onEditProfile = onEditProfile;
 
-		setLayout(new BorderLayout(0, 10));
+		setLayout(new BorderLayout(0, 8));
 		setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+		profileList.setLayout(new BoxLayout(profileList, BoxLayout.Y_AXIS));
 
 		JButton support = new JButton("Support",
 			new ImageIcon(ImageUtil.loadImageResource(ParticlesPlugin.class, "/support.png")));
 		support.setToolTipText("Buy me a coffee");
 		support.addActionListener(e -> LinkBrowser.browse("https://buymeacoffee.com/cnnnr"));
 
-		JButton open = new JButton("Open vertex picker");
-		open.addActionListener(e -> openViewer.run());
+		JPanel controls = new JPanel(new GridLayout(0, 1, 0, 6));
+		controls.add(support);
 
-		JLabel hint = new JLabel("<html>Pick a mesh piece from the list, then click vertices "
-			+ "to toggle particle emission from them. Emitters are saved per piece and follow "
-			+ "it across gear changes.</html>");
+		if (developerMode)
+		{
+			JButton open = new JButton("Open vertex picker");
+			open.addActionListener(e -> openViewer.run());
+			controls.add(open);
+		}
 
-		profileList.setLayout(new BoxLayout(profileList, BoxLayout.Y_AXIS));
+		searchBar.setIcon(IconTextField.Icon.SEARCH);
+		searchBar.getDocument().addDocumentListener(new DocumentListener()
+		{
+			@Override
+			public void insertUpdate(DocumentEvent e)
+			{
+				render();
+			}
 
-		JPanel buttons = new JPanel(new GridLayout(0, 1, 0, 6));
-		buttons.add(support);
-		buttons.add(open);
+			@Override
+			public void removeUpdate(DocumentEvent e)
+			{
+				render();
+			}
 
-		JPanel top = new JPanel(new BorderLayout(0, 10));
-		top.add(buttons, BorderLayout.NORTH);
-		top.add(hint, BorderLayout.CENTER);
-		add(top, BorderLayout.NORTH);
+			@Override
+			public void changedUpdate(DocumentEvent e)
+			{
+				render();
+			}
+		});
+		searchBar.addClearListener(this::render);
+		controls.add(searchBar);
+
+		MaterialTabGroup tabGroup = new MaterialTabGroup();
+		tabGroup.setLayout(new GridLayout(1, 0, 4, 0));
+		for (Category value : Category.values())
+		{
+			MaterialTab tab = new MaterialTab(value.label, tabGroup, new JPanel());
+			tab.setOnSelectEvent(() ->
+			{
+				category = value;
+				render();
+				return true;
+			});
+			tabGroup.addTab(tab);
+			if (value == Category.ALL)
+			{
+				tabGroup.select(tab);
+			}
+		}
+		controls.add(tabGroup);
+
+		JPanel north = new JPanel(new BorderLayout(0, 8));
+		north.add(controls, BorderLayout.NORTH);
+		if (developerMode)
+		{
+			north.add(new JLabel("<html>Pick a mesh piece in the vertex picker, then click "
+				+ "vertices to toggle particle emission from them.</html>"), BorderLayout.CENTER);
+		}
+
+		add(north, BorderLayout.NORTH);
 		add(profileList, BorderLayout.CENTER);
 	}
 
 	/**
-	 * Rebuild the emitter piece list. Must be called on the Swing EDT.
+	 * Update the profile data and re-render. Must be called on the Swing EDT.
 	 *
 	 * @param presentSignatures signatures of pieces on the currently worn model
 	 */
 	void rebuild(Map<String, EmitterProfile> profiles, Set<String> presentSignatures)
 	{
+		this.profiles = profiles;
+		this.presentSignatures = presentSignatures;
+		render();
+	}
+
+	/**
+	 * Re-render the list through the current category tab and search text.
+	 */
+	private void render()
+	{
 		profileList.removeAll();
 
-		if (!profiles.isEmpty())
+		String query = searchBar.getText() == null ? "" : searchBar.getText().trim().toLowerCase();
+		List<Map.Entry<String, EmitterProfile>> entries = new ArrayList<>(profiles.entrySet());
+		entries.removeIf(entry -> !category.matches(entry.getValue())
+			|| !matchesSearch(entry.getValue(), query));
+		entries.sort(Comparator.comparing(entry ->
+			entry.getValue().getName() == null ? "" : entry.getValue().getName().toLowerCase()));
+
+		if (!entries.isEmpty())
 		{
-			JLabel header = new JLabel("Emitter pieces");
+			JLabel header = new JLabel(entries.size() + (entries.size() == 1 ? " profile" : " profiles"));
 			header.setAlignmentX(Component.LEFT_ALIGNMENT);
 			profileList.add(header);
 			profileList.add(Box.createVerticalStrut(6));
 		}
 
-		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
+		for (Map.Entry<String, EmitterProfile> entry : entries)
 		{
-			String profileKey = entry.getKey();
-			EmitterProfile profile = entry.getValue();
+			profileList.add(buildRow(entry.getKey(), entry.getValue()));
+		}
 
-			boolean worn = presentSignatures.contains(profile.getSignature());
-			String text = profile.getName()
-				+ (profile.isProjectileTarget() ? " [proj " + profile.getProjectileId() + "]" : "")
-				+ (profile.getItemIds().isEmpty() ? "" : "*");
+		profileList.revalidate();
+		profileList.repaint();
+	}
 
-			JCheckBox toggle = new JCheckBox(text, profile.isEnabled());
-			toggle.setToolTipText(worn
-				? "This profile's piece is part of the model you are wearing now"
-				: "This profile's piece is not on your current model");
-			toggle.addActionListener(e -> onToggleProfile.accept(profileKey, toggle.isSelected()));
+	private JPanel buildRow(String profileKey, EmitterProfile profile)
+	{
+		boolean worn = presentSignatures.contains(profile.getSignature());
+		String text = profile.getName()
+			+ (profile.isProjectileTarget() ? " [proj " + profile.getProjectileId() + "]" : "")
+			+ (profile.getItemIds().isEmpty() ? "" : "*");
 
+		JCheckBox toggle = new JCheckBox(text, profile.isEnabled());
+		toggle.setToolTipText(worn
+			? "This profile's piece is part of the model you are wearing now"
+			: "This profile's piece is not on your current model");
+		toggle.addActionListener(e -> onToggleProfile.accept(profileKey, toggle.isSelected()));
+
+		JPanel row = new JPanel(new BorderLayout());
+		row.setAlignmentX(Component.LEFT_ALIGNMENT);
+		row.add(toggle, BorderLayout.CENTER);
+
+		if (developerMode)
+		{
 			JButton edit = new JButton("e");
 			edit.setMargin(new Insets(0, 4, 0, 4));
-			edit.setToolTipText(worn
-				? "Edit this profile's vertices and style in the vertex picker"
-				: "Opens the vertex picker; wear the piece to see and edit it");
+			edit.setToolTipText("Edit this profile in the vertex picker");
 			edit.addActionListener(e -> onEditProfile.accept(profileKey));
 
 			JButton rename = new JButton("~");
@@ -124,15 +243,40 @@ class ParticlesPanel extends PluginPanel
 			buttons.add(edit);
 			buttons.add(rename);
 			buttons.add(delete);
-
-			JPanel row = new JPanel(new BorderLayout());
-			row.setAlignmentX(Component.LEFT_ALIGNMENT);
-			row.add(toggle, BorderLayout.CENTER);
 			row.add(buttons, BorderLayout.EAST);
-			profileList.add(row);
 		}
 
-		profileList.revalidate();
-		profileList.repaint();
+		return row;
+	}
+
+	private static boolean matchesSearch(EmitterProfile profile, String query)
+	{
+		if (query.isEmpty())
+		{
+			return true;
+		}
+		if (profile.getName() != null && profile.getName().toLowerCase().contains(query))
+		{
+			return true;
+		}
+		if (profile.isProjectileTarget() && String.valueOf(profile.getProjectileId()).contains(query))
+		{
+			return true;
+		}
+		for (int id : profile.getItemIds())
+		{
+			if (String.valueOf(id).contains(query))
+			{
+				return true;
+			}
+		}
+		for (int id : profile.getAnimationIds())
+		{
+			if (String.valueOf(id).contains(query))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 }
