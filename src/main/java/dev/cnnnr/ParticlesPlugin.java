@@ -186,12 +186,18 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	private final Map<Player, PlayerEmitters> playerEmitters = new HashMap<>();
 	private int playerStamp;
 	/**
-	 * Mirror of the engine's stacked-actor dedup (tileLastDrawnActor in the
-	 * deobfuscated client): actors standing exactly at tile center claim
-	 * their tile in draw order, and only the claimant is drawn. Reused per
-	 * tick.
+	 * Provable-visibility gate for the engine's stacked-actor dedup
+	 * (tileLastDrawnActor): emit only when the engine PROVABLY draws the
+	 * player - movers, the local player, and sole centered tile occupants.
+	 * Contested tiles stay silent rather than risk emitting for a hidden
+	 * player; exact stack winners aren't reliably reconstructible from
+	 * plugin-visible state. Reused per tick.
 	 */
 	private final Map<Long, Player> tileOwners = new HashMap<>();
+	/**
+	 * Tiles where two or more centered players overlap this tick.
+	 */
+	private final Set<Long> contestedTiles = new HashSet<>();
 	/**
 	 * Tiles claimed by a size-1 NPC standing at their center; the engine's
 	 * NPC pass runs before other players, so those players aren't drawn.
@@ -421,28 +427,17 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		anchorCount = 0;
 		featherDebugPaths.clear();
 
-		// Mirror the engine's stacked-actor dedup exactly (tileLastDrawnActor
-		// in the deobfuscated client, tileLastOccupiedCycle in the 2004
-		// client): actors standing exactly at tile center claim their tile in
-		// draw order - local player, then the local player's player combat
-		// target, then size-1 NPCs, then players by ascending index - and
-		// only the claimant is drawn. Moving actors bypass the dedup.
+		// Provable-visibility gate against the engine's stacked-actor dedup
+		// (tileLastDrawnActor / tileLastOccupiedCycle): the dedup only
+		// applies to actors standing exactly at tile center, so movers and
+		// the local player are always drawn, and a sole centered occupant of
+		// an NPC-free tile is always drawn. Contested tiles are left silent -
+		// the engine's exact winner isn't reliably reconstructible here.
 		playerStamp++;
 		tileOwners.clear();
+		contestedTiles.clear();
 		npcClaimedTiles.clear();
 
-		if (isCentered(localPlayer))
-		{
-			tileOwners.put(tileKey(localPlayer), localPlayer);
-		}
-		if (localPlayer.getInteracting() instanceof Player)
-		{
-			Player target = (Player) localPlayer.getInteracting();
-			if (target.getWorldLocation().getPlane() == level && isCentered(target))
-			{
-				tileOwners.putIfAbsent(tileKey(target), target);
-			}
-		}
 		for (NPC npc : client.getTopLevelWorldView().npcs())
 		{
 			if (npc == null || npc.getWorldLocation().getPlane() != level)
@@ -459,11 +454,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				continue;
 			}
-			long key = ((long) (lp.getX() >> 7) << 32) | ((lp.getY() >> 7) & 0xffffffffL);
-			if (!tileOwners.containsKey(key))
-			{
-				npcClaimedTiles.add(key);
-			}
+			npcClaimedTiles.add(((long) (lp.getX() >> 7) << 32) | ((lp.getY() >> 7) & 0xffffffffL));
 		}
 		for (Player player : client.getTopLevelWorldView().players())
 		{
@@ -479,13 +470,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				continue;
 			}
 			long key = tileKey(player);
-			if (!tileOwners.containsKey(key) && !npcClaimedTiles.contains(key))
+			if (tileOwners.putIfAbsent(key, player) != null)
 			{
-				tileOwners.put(key, player);
+				contestedTiles.add(key);
 			}
 		}
 
-		// Every drawn player in the scene emits, not just the local one.
+		// Every provably drawn player emits, not just the local one.
 		// players() spans all four planes of the scene, but the client only
 		// draws the current one - other planes must not emit at all.
 		for (Player player : client.getTopLevelWorldView().players())
@@ -499,8 +490,22 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				continue;
 			}
-			boolean drawn = player.getWorldLocation().getPlane() == level
-				&& (drawsUnconditionally(player) || tileOwners.get(tileKey(player)) == player);
+			boolean drawn;
+			if (player.getWorldLocation().getPlane() != level)
+			{
+				drawn = false;
+			}
+			else if (!isCentered(player) || player == localPlayer)
+			{
+				drawn = true;
+			}
+			else
+			{
+				long key = tileKey(player);
+				drawn = !contestedTiles.contains(key)
+					&& !npcClaimedTiles.contains(key)
+					&& tileOwners.get(key) == player;
+			}
 			if (!drawn)
 			{
 				// Hidden under a stack: stop emitting and break trail
@@ -1039,17 +1044,6 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	{
 		LocalPoint lp = player.getLocalLocation();
 		return (lp.getX() & 127) == 64 && (lp.getY() & 127) == 64;
-	}
-
-	/**
-	 * Actors the engine draws regardless of tile claims: only those not
-	 * standing exactly at a tile center (i.e. mid-movement). Verified against
-	 * the 2004 client: the other bypass is the rare player-to-scenery
-	 * transmog (locModel), not spot anims.
-	 */
-	private static boolean drawsUnconditionally(Player player)
-	{
-		return !isCentered(player);
 	}
 
 	private static long tileKey(Player player)
