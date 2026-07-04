@@ -181,7 +181,8 @@ class ParticlesPanel extends PluginPanel
 		controls.add(searchBar);
 
 		MaterialTabGroup tabGroup = new MaterialTabGroup();
-		tabGroup.setLayout(new GridLayout(1, 0, 4, 0));
+		// Three equal tabs per row, wrapping like the button grid above
+		tabGroup.setLayout(new GridLayout(0, 3, 4, 4));
 		for (Category value : Category.values())
 		{
 			MaterialTab tab = new MaterialTab(value.label, tabGroup, new JPanel());
