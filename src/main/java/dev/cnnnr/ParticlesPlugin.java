@@ -183,6 +183,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 	private final Map<Player, PlayerEmitters> playerEmitters = new HashMap<>();
 	private int playerStamp;
+	/**
+	 * One emitting player per occupied tile: stacked players render as a
+	 * single visible model, so hidden players' particles would float around
+	 * with no visible owner. Reused per tick.
+	 */
+	private final Map<Long, Player> tileOwners = new HashMap<>();
 
 	// Debug marker aggregate across all players, read by the overlay; only
 	// filled while markers are shown. Client thread.
@@ -404,6 +410,20 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		anchorCount = 0;
 		featherDebugPaths.clear();
 
+		// One emitting player per tile: the client shows a single model for a
+		// stack, so only its owner should emit. The local player wins their
+		// tile; otherwise first in scene order (the engine's true topmost
+		// render order isn't exposed, so this is a deterministic stand-in).
+		tileOwners.clear();
+		for (Player player : client.getTopLevelWorldView().players())
+		{
+			if (player != null)
+			{
+				tileOwners.putIfAbsent(tileKey(player), player);
+			}
+		}
+		tileOwners.put(tileKey(localPlayer), localPlayer);
+
 		// Every player in the scene emits, not just the local one
 		playerStamp++;
 		for (Player player : client.getTopLevelWorldView().players())
@@ -414,6 +434,20 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 			PlayerEmitters pe = playerEmitters.computeIfAbsent(player, p -> new PlayerEmitters());
 			pe.stamp = playerStamp;
+
+			if (tileOwners.get(tileKey(player)) != player)
+			{
+				// Hidden under a stack: stop emitting and break trail
+				// continuity so un-stacking doesn't lerp from stale positions
+				pe.anchorCount = 0;
+				pe.prevCount = 0;
+				for (ActiveEmitter emitter : pe.emitters)
+				{
+					emitter.carry = 0;
+				}
+				continue;
+			}
+
 			resolvePlayer(pe, player);
 			updateAnchors(pe, player, markers);
 			emit(dt, pe, player);
@@ -917,6 +951,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			adjacency.get(a).add(b);
 			adjacency.get(b).add(a);
 		}
+	}
+
+	private static long tileKey(Player player)
+	{
+		LocalPoint lp = player.getLocalLocation();
+		return ((long) (lp.getX() >> 7) << 32) | ((lp.getY() >> 7) & 0xffffffffL);
 	}
 
 	private static Set<Integer> wornItemIds(PlayerComposition composition)
