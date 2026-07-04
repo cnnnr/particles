@@ -2018,6 +2018,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				continue;
 			}
+			// Attach to EVERY matching piece: identical twin fragments (a
+			// double sconce's two flames) share a signature and should all
+			// emit, matching the player path's behavior
 			for (ModelSnapshot.Piece piece : snapshot.getPieces())
 			{
 				if (!piece.getSignature().equals(profile.getSignature()))
@@ -2041,7 +2044,6 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 					}
 					oe.emitters.add(new ActiveEmitter(style, vertices, null));
 				}
-				break;
 			}
 		}
 	}
