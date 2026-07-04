@@ -52,15 +52,35 @@ public interface ParticlesConfig extends Config
 		return false;
 	}
 
+	enum ApplyTo
+	{
+		EVERYONE("Everyone"),
+		FRIENDS("Friends"),
+		ME("Me");
+
+		private final String label;
+
+		ApplyTo(String label)
+		{
+			this.label = label;
+		}
+
+		@Override
+		public String toString()
+		{
+			return label;
+		}
+	}
+
 	@ConfigItem(
 		position = 1,
-		keyName = "justMe",
-		name = "Just me",
-		description = "Only emit particles on your own character"
+		keyName = "applyTo",
+		name = "Apply to",
+		description = "Which players get particles: everyone, you and your friends, or only you"
 	)
-	default boolean justMe()
+	default ApplyTo applyTo()
 	{
-		return false;
+		return ApplyTo.EVERYONE;
 	}
 
 	@ConfigItem(
@@ -74,9 +94,20 @@ public interface ParticlesConfig extends Config
 		return Density.NORMAL;
 	}
 
-	@Range(min = 2, max = 64)
 	@ConfigItem(
 		position = 3,
+		keyName = "fullSelfDensity",
+		name = "Full density for me",
+		description = "Keep your own character at full density even when Particle density is lowered"
+	)
+	default boolean fullSelfDensity()
+	{
+		return false;
+	}
+
+	@Range(min = 2, max = 64)
+	@ConfigItem(
+		position = 4,
 		keyName = "effectRadius",
 		name = "Effect radius",
 		description = "Only players within this many tiles of you emit particles"
@@ -88,7 +119,7 @@ public interface ParticlesConfig extends Config
 
 	// keyName predates the rename; changing it would reset users' setting
 	@ConfigItem(
-		position = 5,
+		position = 6,
 		keyName = "showAnchor",
 		name = "Show Debug Text",
 		description = "Draw a diagnostics line with live particle counts (plus emitter markers in developer mode)"
@@ -100,7 +131,7 @@ public interface ParticlesConfig extends Config
 
 	@Range(min = 128, max = 8192)
 	@ConfigItem(
-		position = 4,
+		position = 5,
 		keyName = "maxParticles",
 		name = "Max live particles",
 		description = "Total particle budget across all emitters; higher values cost FPS"

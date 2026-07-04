@@ -337,6 +337,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		lastNanos = System.nanoTime();
 		stylesRevision = -1;
 		playerEmitters.clear();
+		// Migration: the Just me checkbox became the Apply to dropdown
+		if ("true".equals(configManager.getConfiguration(ParticlesConfig.GROUP, "justMe"))
+			&& configManager.getConfiguration(ParticlesConfig.GROUP, "applyTo") == null)
+		{
+			configManager.setConfiguration(ParticlesConfig.GROUP, "applyTo", ParticlesConfig.ApplyTo.ME);
+		}
+		configManager.unsetConfiguration(ParticlesConfig.GROUP, "justMe");
+
 		renderer = new ParticleRenderer(client);
 		store = new EmitterStore(configManager, gson);
 		store.load();
@@ -557,7 +565,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			&& isCentered(localClaimTarget)
 			? tileKey(localClaimTarget) : Long.MIN_VALUE;
 
-		boolean justMe = config.justMe();
+		ParticlesConfig.ApplyTo applyTo = config.applyTo();
 		int radiusUnits = config.effectRadius() * 128;
 		LocalPoint localLp = localPlayer.getLocalLocation();
 
@@ -577,7 +585,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 			boolean drawn;
 			if (player != localPlayer
-				&& (justMe || player.getLocalLocation().distanceTo(localLp) > radiusUnits))
+				&& (applyTo == ParticlesConfig.ApplyTo.ME
+					|| (applyTo == ParticlesConfig.ApplyTo.FRIENDS && !player.isFriend())
+					|| player.getLocalLocation().distanceTo(localLp) > radiusUnits))
 			{
 				// Out of scope by user preference; the hidden branch below
 				// still clears their state so re-entry starts clean
@@ -1387,7 +1397,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		int actionAnimation = player.getAnimation();
 		int actionFrame = player.getAnimationFrame();
 		int poseAnimation = player.getPoseAnimation();
-		if (player == client.getLocalPlayer())
+		boolean isLocal = player == client.getLocalPlayer();
+		if (isLocal)
 		{
 			lastActionAnimation = actionAnimation != -1 ? actionAnimation : lastActionAnimation;
 		}
@@ -1398,6 +1409,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 		int budget = config.maxParticles();
 		float densityScale = config.density().getFactor();
+		if (isLocal && densityScale < 1f && config.fullSelfDensity())
+		{
+			densityScale = 1f;
+		}
 		for (ActiveEmitter emitter : pe.emitters)
 		{
 			if (emitter.anchorCount == 0)
