@@ -95,6 +95,12 @@ class ModelViewerFrame extends JFrame
 		void recordAnimation();
 
 		/**
+		 * Pose the loaded NPC's cache mesh at every frame of this animation
+		 * ID, arriving as an exact-frame recording. NPC snapshots only.
+		 */
+		void poseAnimation(int animId);
+
+		/**
 		 * The user manually returned to the model view; drop any object
 		 * context and show the player again.
 		 */
@@ -313,10 +319,33 @@ class ModelViewerFrame extends JFrame
 		record.setToolTipText("Sample the loaded target's animated mesh every tick for ~3 seconds, then scrub below the viewport to pick vertices on any frame. Trigger the animation while it records.");
 		record.addActionListener(e -> callbacks.recordAnimation());
 
+		JButton pose = new JButton("Pose anim (cache)");
+		pose.setToolTipText("NPC snapshots only: pose the cache mesh at every exact frame of an animation ID and scrub - nothing needs to play in game");
+		pose.addActionListener(e ->
+		{
+			String input = javax.swing.JOptionPane.showInputDialog(this, "Animation ID:");
+			if (input == null)
+			{
+				return;
+			}
+			try
+			{
+				int id = Integer.parseInt(input.trim());
+				if (id >= 0)
+				{
+					callbacks.poseAnimation(id);
+				}
+			}
+			catch (NumberFormatException ignored)
+			{
+			}
+		});
+
 		JPanel top = new JPanel(new GridLayout(0, 1, 0, 4));
 		top.add(modeSelector);
 		top.add(refresh);
 		top.add(record);
+		top.add(pose);
 
 		JButton addProjectile = new JButton("Add");
 		addProjectile.setToolTipText("Create a profile for the typed projectile ID, or the selected capture row");

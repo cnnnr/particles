@@ -25,6 +25,8 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.ActorSpotAnim;
+import net.runelite.api.Animation;
+import net.runelite.api.AnimationController;
 import net.runelite.api.Client;
 import net.runelite.api.DecorativeObject;
 import net.runelite.api.DynamicObject;
@@ -35,6 +37,7 @@ import net.runelite.api.GroundObject;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Model;
+import net.runelite.api.ModelData;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
 import net.runelite.api.Perspective;
@@ -3380,14 +3383,125 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 		}
 		Model model = best == null ? null : best.getModel();
+		String name = best == null ? null : cleanTargetName(best.getName());
+		if (model == null)
+		{
+			// No live instance in scene: build the mesh from the cache
+			// definition instead, so authoring needs nothing spawned
+			ModelData cached = npcCacheModel(npcId);
+			if (cached != null)
+			{
+				model = cached.light();
+				NPCComposition composition = client.getNpcDefinition(npcId);
+				name = composition == null ? null : cleanTargetName(composition.getName());
+			}
+		}
 		if (model == null)
 		{
 			SwingUtilities.invokeLater(() -> viewerNpcId = -1);
 			capturePlayerSnapshot();
 			return;
 		}
-		String name = cleanTargetName(best.getName());
 		pushNonPlayerSnapshot(ModelSnapshot.capture(model), name);
+	}
+
+	/**
+	 * The NPC's composed cache mesh (unposed), or null. Client thread.
+	 */
+	@Nullable
+	private ModelData npcCacheModel(int npcId)
+	{
+		NPCComposition composition = client.getNpcDefinition(npcId);
+		int[] modelIds = composition == null ? null : composition.getModels();
+		if (modelIds == null || modelIds.length == 0)
+		{
+			return null;
+		}
+		List<ModelData> parts = new ArrayList<>();
+		for (int modelId : modelIds)
+		{
+			ModelData part = client.loadModelData(modelId);
+			if (part != null)
+			{
+				parts.add(part);
+			}
+		}
+		return parts.isEmpty() ? null : client.mergeModels(parts.toArray(new ModelData[0]));
+	}
+
+	@Override
+	public void poseAnimation(int animId)
+	{
+		int npcId = viewerNpcId;
+		if (npcId < 0 || animId < 0)
+		{
+			return;
+		}
+		clientThread.invokeLater(() -> poseNpcAnimation(npcId, animId));
+	}
+
+	/**
+	 * Build a synthetic scrubber recording straight from the cache: the
+	 * NPC's composed mesh posed at every exact frame of the animation via
+	 * AnimationController.animate - nothing needs to exist in the scene or
+	 * play in game. Client thread.
+	 */
+	private void poseNpcAnimation(int npcId, int animId)
+	{
+		ModelData merged = npcCacheModel(npcId);
+		if (merged == null)
+		{
+			log.debug("Cache pose failed: no models for npc {}", npcId);
+			return;
+		}
+		AnimationController controller = new AnimationController(client, animId);
+		Animation animation = controller.getAnimation();
+		int numFrames = animation == null ? 0 : animation.getNumFrames();
+		if (numFrames <= 0)
+		{
+			log.debug("Cache pose failed: no frames for anim {}", animId);
+			return;
+		}
+		numFrames = Math.min(numFrames, 500);
+
+		float[][] xs = new float[numFrames][];
+		float[][] ys = new float[numFrames][];
+		float[][] zs = new float[numFrames][];
+		int[] frames = new int[numFrames];
+		ModelSnapshot topology = null;
+		for (int f = 0; f < numFrames; f++)
+		{
+			// Fresh lit copy per frame so transforms never accumulate
+			Model base = merged.shallowCopy().cloneVertices().light();
+			controller.setFrame(f);
+			Model posed = controller.animate(base);
+			if (posed == null)
+			{
+				posed = base;
+			}
+			if (topology == null)
+			{
+				topology = ModelSnapshot.capture(posed);
+			}
+			if (posed.getVerticesCount() != topology.getVertexCount())
+			{
+				log.debug("Cache pose aborted: vertex count changed at frame {}", f);
+				return;
+			}
+			xs[f] = posed.getVerticesX().clone();
+			ys[f] = posed.getVerticesY().clone();
+			zs[f] = posed.getVerticesZ().clone();
+			frames[f] = f;
+		}
+
+		pushViewerSnapshot(topology, null, false);
+		SwingUtilities.invokeLater(() ->
+		{
+			if (viewerFrame != null)
+			{
+				viewerFrame.setRecording(xs, ys, zs, frames);
+			}
+		});
 	}
 
 	/**
