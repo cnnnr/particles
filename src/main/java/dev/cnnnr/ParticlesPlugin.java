@@ -179,10 +179,16 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		int prevCount;
 		boolean rebuilt;
 		int stamp;
+		/**
+		 * Order this player entered our view; used to pick the visible player
+		 * of a stacked tile.
+		 */
+		int arrivalSeq;
 	}
 
 	private final Map<Player, PlayerEmitters> playerEmitters = new HashMap<>();
 	private int playerStamp;
+	private int arrivalCounter;
 	/**
 	 * One emitting player per occupied tile: stacked players render as a
 	 * single visible model, so hidden players' particles would float around
@@ -411,31 +417,49 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		featherDebugPaths.clear();
 
 		// One emitting player per tile: the client shows a single model for a
-		// stack, so only its owner should emit. Same-tile actors paint in
-		// draw-list order, so the LAST player in scene order should be the
-		// visible one; the local player is known to render atop stacks they
-		// stand in, so they always win their own tile.
-		tileOwners.clear();
-		for (Player player : client.getTopLevelWorldView().players())
-		{
-			if (player != null)
-			{
-				tileOwners.put(tileKey(player), player);
-			}
-		}
-		tileOwners.put(tileKey(localPlayer), localPlayer);
-
-		// Every player in the scene emits, not just the local one
+		// stack, so only its owner should emit. The engine processes actors
+		// in the order they entered the local view (not index order), and the
+		// earliest-arrived player of a stack paints on top - so the earliest
+		// arrival owns the tile. The local player is known to render atop
+		// stacks they stand in, so they always win their own tile.
 		playerStamp++;
+		tileOwners.clear();
 		for (Player player : client.getTopLevelWorldView().players())
 		{
 			if (player == null)
 			{
 				continue;
 			}
-			PlayerEmitters pe = playerEmitters.computeIfAbsent(player, p -> new PlayerEmitters());
+			PlayerEmitters pe = playerEmitters.computeIfAbsent(player, p ->
+			{
+				PlayerEmitters created = new PlayerEmitters();
+				created.arrivalSeq = ++arrivalCounter;
+				return created;
+			});
 			pe.stamp = playerStamp;
 
+			long key = tileKey(player);
+			Player current = tileOwners.get(key);
+			if (current == null || pe.arrivalSeq < playerEmitters.get(current).arrivalSeq)
+			{
+				tileOwners.put(key, player);
+			}
+		}
+		tileOwners.put(tileKey(localPlayer), localPlayer);
+
+		// Every player in the scene emits, not just the local one
+		for (Player player : client.getTopLevelWorldView().players())
+		{
+			if (player == null)
+			{
+				continue;
+			}
+			PlayerEmitters pe = playerEmitters.get(player);
+
+			if (pe == null)
+			{
+				continue;
+			}
 			if (tileOwners.get(tileKey(player)) != player)
 			{
 				// Hidden under a stack: stop emitting and break trail
