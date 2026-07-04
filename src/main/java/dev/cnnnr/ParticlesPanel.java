@@ -263,7 +263,10 @@ class ParticlesPanel extends PluginPanel
 
 	private JPanel buildRow(String profileKey, EmitterProfile profile)
 	{
-		boolean worn = presentSignatures.contains(profile.getSignature());
+		// Signature presence only means worn for player profiles; trivial
+		// fragment signatures collide across unrelated models
+		boolean worn = EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType())
+			&& presentSignatures.contains(profile.getSignature());
 		String text = profile.getName()
 			+ (profile.isProjectileTarget() ? " [proj " + profile.getProjectileId() + "]" : "")
 			+ (profile.isObjectTarget() ? " [obj " + profile.getObjectId() + "]" : "");

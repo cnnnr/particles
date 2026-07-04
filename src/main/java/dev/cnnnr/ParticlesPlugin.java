@@ -2642,7 +2642,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
 			{
+				// Context matters: trivial fragments (a 5v4f flame) share a
+				// signature across unrelated models, so another object's
+				// profile must not highlight on this snapshot
 				if (!piece.getSignature().equals(entry.getValue().getSignature())
+					|| !matchesViewerContext(entry.getValue())
 					|| (profileKey != null && !profileKey.equals(entry.getKey())))
 				{
 					continue;
