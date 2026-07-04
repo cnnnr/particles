@@ -2493,6 +2493,41 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	}
 
 	/**
+	 * The live animation frame of an animated object's renderable - the same
+	 * scene-side surface the Identificator plugin reads - or -1 for static
+	 * placements.
+	 */
+	private static int objectAnimFrame(@Nullable TileObject object)
+	{
+		Renderable renderable = null;
+		if (object instanceof GameObject)
+		{
+			renderable = ((GameObject) object).getRenderable();
+		}
+		else if (object instanceof WallObject)
+		{
+			renderable = ((WallObject) object).getRenderable1();
+			if (!(renderable instanceof DynamicObject))
+			{
+				renderable = ((WallObject) object).getRenderable2();
+			}
+		}
+		else if (object instanceof DecorativeObject)
+		{
+			renderable = ((DecorativeObject) object).getRenderable();
+			if (!(renderable instanceof DynamicObject))
+			{
+				renderable = ((DecorativeObject) object).getRenderable2();
+			}
+		}
+		else if (object instanceof GroundObject)
+		{
+			renderable = ((GroundObject) object).getRenderable();
+		}
+		return renderable instanceof DynamicObject ? ((DynamicObject) renderable).getAnimFrame() : -1;
+	}
+
+	/**
 	 * Every scenery instance on one plane of the loaded scene, deduplicated
 	 * (multi-tile objects appear on each covered tile). Dev-tool path only -
 	 * this walks the whole scene.
@@ -3129,6 +3164,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (recordObjectId >= 0)
 		{
 			model = recordObject == null ? null : objectModel(recordObject);
+			frame = objectAnimFrame(recordObject);
 		}
 		else if (recordNpcId >= 0)
 		{
