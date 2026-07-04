@@ -14,31 +14,6 @@ public interface ParticlesConfig extends Config
 {
 	String GROUP = "cnnnr-particles";
 
-	/**
-	 * Which stacked player's particles render. The engine's draw order for
-	 * players sharing a tile isn't exposed, so the matching rule is being
-	 * determined empirically; SUPPRESS renders none on contested tiles
-	 * (except the local player's own).
-	 */
-	enum StackOwnerRule
-	{
-		FIRST_IN_DRAW_ORDER,
-		LAST_IN_DRAW_ORDER,
-		LOWEST_INDEX,
-		HIGHEST_INDEX,
-		SUPPRESS
-	}
-
-	@ConfigItem(
-		position = 10,
-		keyName = "stackOwnerRule",
-		name = "Stack owner rule",
-		description = "Which stacked player's particles render, approximating the client's draw order. SUPPRESS hides particles on shared tiles entirely (except your own)."
-	)
-	default StackOwnerRule stackOwnerRule()
-	{
-		return StackOwnerRule.FIRST_IN_DRAW_ORDER;
-	}
 
 	@ConfigItem(
 		position = 0,

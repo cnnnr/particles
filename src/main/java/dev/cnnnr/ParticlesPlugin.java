@@ -26,6 +26,8 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Model;
+import net.runelite.api.NPC;
+import net.runelite.api.NPCComposition;
 import net.runelite.api.Perspective;
 import net.runelite.api.Player;
 import net.runelite.api.PlayerComposition;
@@ -179,36 +181,22 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		int prevCount;
 		boolean rebuilt;
 		int stamp;
-		/**
-		 * Position in our mirror of the engine's player processing list; the
-		 * engine draws only the first-processed player of a stacked tile, so
-		 * the lowest slot is the visible model.
-		 */
-		int drawSlot;
-		/**
-		 * The player's engine index, an alternative stacked-owner signal.
-		 */
-		int playerId;
 	}
 
 	private final Map<Player, PlayerEmitters> playerEmitters = new HashMap<>();
 	private int playerStamp;
 	/**
-	 * Mirror of the engine's player processing list: append on entering view,
-	 * swap-remove on leaving - the same mutation pattern the engine uses, so
-	 * slots track its draw order through churn.
-	 */
-	private final List<Player> playerOrder = new ArrayList<>();
-	/**
-	 * One emitting player per occupied tile: stacked players render as a
-	 * single visible model, so hidden players' particles would float around
-	 * with no visible owner. Reused per tick.
+	 * Mirror of the engine's stacked-actor dedup (tileLastDrawnActor in the
+	 * deobfuscated client): actors standing exactly at tile center claim
+	 * their tile in draw order, and only the claimant is drawn. Reused per
+	 * tick.
 	 */
 	private final Map<Long, Player> tileOwners = new HashMap<>();
 	/**
-	 * Tiles occupied by more than one player this tick.
+	 * Tiles claimed by a size-1 NPC standing at their center; the engine's
+	 * NPC pass runs before other players, so those players aren't drawn.
 	 */
-	private final Set<Long> contestedTiles = new HashSet<>();
+	private final Set<Long> npcClaimedTiles = new HashSet<>();
 
 	// Debug marker aggregate across all players, read by the overlay; only
 	// filled while markers are shown. Client thread.
@@ -315,7 +303,6 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		lastNanos = System.nanoTime();
 		stylesRevision = -1;
 		playerEmitters.clear();
-		playerOrder.clear();
 		renderer = new ParticleRenderer(client);
 		store = new EmitterStore(configManager, gson);
 		store.load();
@@ -412,7 +399,6 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			anchorCount = 0;
 			playerEmitters.clear();
-			playerOrder.clear();
 			particleSystem.clear(DISCARD);
 			renderer.reset();
 			lastLevel = -1;
@@ -435,50 +421,71 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		anchorCount = 0;
 		featherDebugPaths.clear();
 
-		// One emitting player per tile: the client shows a single model for a
-		// stack, so only its owner should emit. The engine's true stacked
-		// draw order isn't exposed, so the election rule is configurable
-		// while it's pinned down empirically. The local player is known to
-		// render atop stacks they stand in, so they always win their own tile.
-		ParticlesConfig.StackOwnerRule stackRule = config.stackOwnerRule();
+		// Mirror the engine's stacked-actor dedup exactly (tileLastDrawnActor
+		// in the deobfuscated client): actors standing exactly at tile center
+		// claim their tile in draw order - local player, then the local
+		// player's player combat target, then size-1 NPCs, then players by
+		// ascending index - and only the claimant is drawn. Moving actors and
+		// actors with an active spot anim bypass the dedup and always draw.
 		playerStamp++;
 		tileOwners.clear();
-		contestedTiles.clear();
+		npcClaimedTiles.clear();
+
+		if (isCentered(localPlayer))
+		{
+			tileOwners.put(tileKey(localPlayer), localPlayer);
+		}
+		if (localPlayer.getInteracting() instanceof Player)
+		{
+			Player target = (Player) localPlayer.getInteracting();
+			if (isCentered(target))
+			{
+				tileOwners.putIfAbsent(tileKey(target), target);
+			}
+		}
+		for (NPC npc : client.getTopLevelWorldView().npcs())
+		{
+			if (npc == null)
+			{
+				continue;
+			}
+			NPCComposition composition = npc.getTransformedComposition();
+			if (composition == null || composition.getSize() != 1)
+			{
+				continue;
+			}
+			LocalPoint lp = npc.getLocalLocation();
+			if ((lp.getX() & 127) != 64 || (lp.getY() & 127) != 64)
+			{
+				continue;
+			}
+			long key = ((long) (lp.getX() >> 7) << 32) | ((lp.getY() >> 7) & 0xffffffffL);
+			if (!tileOwners.containsKey(key))
+			{
+				npcClaimedTiles.add(key);
+			}
+		}
 		for (Player player : client.getTopLevelWorldView().players())
 		{
 			if (player == null)
 			{
 				continue;
 			}
-			PlayerEmitters pe = playerEmitters.get(player);
-			if (pe == null)
-			{
-				pe = new PlayerEmitters();
-				pe.drawSlot = playerOrder.size();
-				playerOrder.add(player);
-				playerEmitters.put(player, pe);
-			}
+			PlayerEmitters pe = playerEmitters.computeIfAbsent(player, p -> new PlayerEmitters());
 			pe.stamp = playerStamp;
-			pe.playerId = player.getId();
 
+			if (!isCentered(player))
+			{
+				continue;
+			}
 			long key = tileKey(player);
-			Player current = tileOwners.get(key);
-			if (current == null)
+			if (!tileOwners.containsKey(key) && !npcClaimedTiles.contains(key))
 			{
 				tileOwners.put(key, player);
 			}
-			else
-			{
-				contestedTiles.add(key);
-				if (ownerBeats(pe, playerEmitters.get(current), stackRule))
-				{
-					tileOwners.put(key, player);
-				}
-			}
 		}
-		tileOwners.put(tileKey(localPlayer), localPlayer);
 
-		// Every player in the scene emits, not just the local one
+		// Every drawn player in the scene emits, not just the local one
 		for (Player player : client.getTopLevelWorldView().players())
 		{
 			if (player == null)
@@ -486,16 +493,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				continue;
 			}
 			PlayerEmitters pe = playerEmitters.get(player);
-
 			if (pe == null)
 			{
 				continue;
 			}
-			long key = tileKey(player);
-			boolean suppressed = tileOwners.get(key) != player
-				|| (stackRule == ParticlesConfig.StackOwnerRule.SUPPRESS
-				&& contestedTiles.contains(key) && player != localPlayer);
-			if (suppressed)
+			boolean drawn = drawsUnconditionally(player)
+				|| tileOwners.get(tileKey(player)) == player;
+			if (!drawn)
 			{
 				// Hidden under a stack: stop emitting and break trail
 				// continuity so un-stacking doesn't lerp from stale positions
@@ -512,16 +516,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			updateAnchors(pe, player, markers);
 			emit(dt, pe, player);
 		}
-		// Sweep departed players with the engine's own removal semantics:
-		// swap-remove, which shifts the last-processed player into the freed
-		// slot and is exactly what reorders stacked draw priority on churn
-		Iterator<Map.Entry<Player, PlayerEmitters>> peIt = playerEmitters.entrySet().iterator();
+		Iterator<PlayerEmitters> peIt = playerEmitters.values().iterator();
 		while (peIt.hasNext())
 		{
-			Map.Entry<Player, PlayerEmitters> entry = peIt.next();
-			if (entry.getValue().stamp != playerStamp)
+			if (peIt.next().stamp != playerStamp)
 			{
-				swapRemoveFromOrder(entry.getValue());
 				peIt.remove();
 			}
 		}
@@ -1030,44 +1029,27 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		}
 	}
 
-	private void swapRemoveFromOrder(PlayerEmitters pe)
+	/**
+	 * Standing exactly at a tile center - the only state the engine's
+	 * stacked-actor dedup applies to.
+	 */
+	private static boolean isCentered(Player player)
 	{
-		int slot = pe.drawSlot;
-		int last = playerOrder.size() - 1;
-		if (slot < 0 || slot > last)
-		{
-			return;
-		}
-		Player moved = playerOrder.get(last);
-		playerOrder.set(slot, moved);
-		playerOrder.remove(last);
-		PlayerEmitters movedPe = playerEmitters.get(moved);
-		if (movedPe != null)
-		{
-			movedPe.drawSlot = slot;
-		}
-		pe.drawSlot = -1;
+		LocalPoint lp = player.getLocalLocation();
+		return (lp.getX() & 127) == 64 && (lp.getY() & 127) == 64;
 	}
 
 	/**
-	 * Stacked-tile election: does candidate a beat current owner b?
+	 * Actors the engine draws regardless of tile claims: mid-movement, or
+	 * carrying an active spot anim (which uses a separate draw path).
 	 */
-	private static boolean ownerBeats(PlayerEmitters a, PlayerEmitters b,
-		ParticlesConfig.StackOwnerRule rule)
+	private static boolean drawsUnconditionally(Player player)
 	{
-		switch (rule)
+		if (!isCentered(player))
 		{
-			case FIRST_IN_DRAW_ORDER:
-				return a.drawSlot < b.drawSlot;
-			case LAST_IN_DRAW_ORDER:
-				return a.drawSlot > b.drawSlot;
-			case LOWEST_INDEX:
-				return a.playerId < b.playerId;
-			case HIGHEST_INDEX:
-				return a.playerId > b.playerId;
-			default:
-				return false;
+			return true;
 		}
+		return player.getSpotAnims().iterator().hasNext();
 	}
 
 	private static long tileKey(Player player)
