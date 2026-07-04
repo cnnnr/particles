@@ -411,15 +411,16 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		featherDebugPaths.clear();
 
 		// One emitting player per tile: the client shows a single model for a
-		// stack, so only its owner should emit. The local player wins their
-		// tile; otherwise first in scene order (the engine's true topmost
-		// render order isn't exposed, so this is a deterministic stand-in).
+		// stack, so only its owner should emit. Same-tile actors paint in
+		// draw-list order, so the LAST player in scene order should be the
+		// visible one; the local player is known to render atop stacks they
+		// stand in, so they always win their own tile.
 		tileOwners.clear();
 		for (Player player : client.getTopLevelWorldView().players())
 		{
 			if (player != null)
 			{
-				tileOwners.putIfAbsent(tileKey(player), player);
+				tileOwners.put(tileKey(player), player);
 			}
 		}
 		tileOwners.put(tileKey(localPlayer), localPlayer);
