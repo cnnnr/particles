@@ -16,6 +16,7 @@ class EmitterProfile
 {
 	static final String TARGET_PLAYER = "player";
 	static final String TARGET_PROJECTILE = "projectile";
+	static final String TARGET_OBJECT = "object";
 
 	private String name;
 	/**
@@ -26,6 +27,12 @@ class EmitterProfile
 	 * Projectile (graphic) ID for projectile profiles; -1 otherwise.
 	 */
 	private int projectileId = -1;
+	/**
+	 * Scenery object ID for object profiles; -1 otherwise. Object profiles
+	 * also carry a piece signature and vertices - the ID says which object,
+	 * the signature says which piece of its model.
+	 */
+	private int objectId = -1;
 	/**
 	 * Topology signature of the mesh piece this profile attaches to. Multiple
 	 * profiles may share a signature (e.g. one per recolored item variant).
@@ -139,6 +146,7 @@ class EmitterProfile
 		EmitterProfile c = new EmitterProfile(name);
 		c.targetType = targetType;
 		c.projectileId = projectileId;
+		c.objectId = objectId;
 		c.signature = signature;
 		c.enabled = enabled;
 		c.vertices = new HashSet<>(vertices);
@@ -149,6 +157,11 @@ class EmitterProfile
 	boolean isProjectileTarget()
 	{
 		return TARGET_PROJECTILE.equals(targetType);
+	}
+
+	boolean isObjectTarget()
+	{
+		return TARGET_OBJECT.equals(targetType);
 	}
 
 	/**

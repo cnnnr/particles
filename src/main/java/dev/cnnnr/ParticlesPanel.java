@@ -43,6 +43,7 @@ class ParticlesPanel extends PluginPanel
 		ALL("All", false),
 		PLAYER("Player", false),
 		PROJECTILE("Proj", true),
+		WORLD("World", true),
 		ANIMATED("Anim", true);
 
 		private final String label;
@@ -68,6 +69,8 @@ class ParticlesPanel extends PluginPanel
 					return EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType());
 				case PROJECTILE:
 					return profile.isProjectileTarget();
+				case WORLD:
+					return profile.isObjectTarget();
 				case ANIMATED:
 					return !profile.getAnimationIds().isEmpty();
 				default:
@@ -261,7 +264,8 @@ class ParticlesPanel extends PluginPanel
 	{
 		boolean worn = presentSignatures.contains(profile.getSignature());
 		String text = profile.getName()
-			+ (profile.isProjectileTarget() ? " [proj " + profile.getProjectileId() + "]" : "");
+			+ (profile.isProjectileTarget() ? " [proj " + profile.getProjectileId() + "]" : "")
+			+ (profile.isObjectTarget() ? " [obj " + profile.getObjectId() + "]" : "");
 
 		JCheckBox toggle = new JCheckBox(text, profile.isEnabled());
 		toggle.setToolTipText(worn

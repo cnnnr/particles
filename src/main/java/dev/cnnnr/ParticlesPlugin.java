@@ -24,7 +24,11 @@ import javax.swing.SwingUtilities;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.DecorativeObject;
+import net.runelite.api.DynamicObject;
+import net.runelite.api.GameObject;
 import net.runelite.api.GameState;
+import net.runelite.api.GroundObject;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Model;
@@ -34,9 +38,22 @@ import net.runelite.api.Perspective;
 import net.runelite.api.Player;
 import net.runelite.api.PlayerComposition;
 import net.runelite.api.Projectile;
+import net.runelite.api.Renderable;
+import net.runelite.api.Scene;
+import net.runelite.api.Tile;
+import net.runelite.api.TileObject;
+import net.runelite.api.WallObject;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.events.ClientTick;
+import net.runelite.api.events.DecorativeObjectDespawned;
+import net.runelite.api.events.DecorativeObjectSpawned;
+import net.runelite.api.events.GameObjectDespawned;
+import net.runelite.api.events.GameObjectSpawned;
 import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GroundObjectDespawned;
+import net.runelite.api.events.GroundObjectSpawned;
+import net.runelite.api.events.WallObjectDespawned;
+import net.runelite.api.events.WallObjectSpawned;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -224,6 +241,33 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	@Nullable
 	private Player localClaimTarget;
 
+	/**
+	 * Per-instance emitter state for tracked scenery. Objects are static or
+	 * engine-animated in place, so there is no trail, movement or stack
+	 * state - just resolved emitters and this tick's anchors. Client thread.
+	 */
+	private static class ObjectEmitters
+	{
+		final List<ActiveEmitter> emitters = new ArrayList<>();
+		float[] anchorXs = new float[0];
+		float[] anchorYs = new float[0];
+		float[] anchorZs = new float[0];
+		int anchorCount;
+		int revision = -1;
+	}
+
+	/**
+	 * Tracked scenery instances, maintained by spawn/despawn events plus a
+	 * scene rescan when the profile store changes. Client thread.
+	 */
+	private final Map<TileObject, ObjectEmitters> objectEmitters = new HashMap<>();
+	/**
+	 * Object IDs that carry at least one object profile; spawns of anything
+	 * else are ignored without allocation.
+	 */
+	private Set<Integer> profiledObjectIds = Set.of();
+	private int profiledIdsRevision = -1;
+
 	// Debug marker aggregate across all players, read by the overlay; only
 	// filled while markers are shown. Client thread.
 	@Getter
@@ -254,6 +298,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * piece against it. EDT only.
 	 */
 	private ModelSnapshot viewerSnapshot;
+
+	/**
+	 * The scenery object ID the viewer's snapshot was captured from, or -1
+	 * when it shows the player. Decides which profile family vertex clicks
+	 * create. EDT only; snapshot captures receive it as a parameter.
+	 */
+	private int viewerObjectId = -1;
 
 	/**
 	 * Piece signatures present on the currently worn model; written on the
@@ -397,6 +448,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			stopped.reset();
 			anchorCount = 0;
 			playerEmitters.clear();
+			objectEmitters.clear();
 			projectileTrackers.clear();
 			activeProjectileProfiles.clear();
 			recentProjectiles.clear();
@@ -427,15 +479,72 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	}
 
 	@Subscribe
+	public void onGameObjectSpawned(GameObjectSpawned event)
+	{
+		trackObject(event.getGameObject());
+	}
+
+	@Subscribe
+	public void onGameObjectDespawned(GameObjectDespawned event)
+	{
+		objectEmitters.remove(event.getGameObject());
+	}
+
+	@Subscribe
+	public void onWallObjectSpawned(WallObjectSpawned event)
+	{
+		trackObject(event.getWallObject());
+	}
+
+	@Subscribe
+	public void onWallObjectDespawned(WallObjectDespawned event)
+	{
+		objectEmitters.remove(event.getWallObject());
+	}
+
+	@Subscribe
+	public void onDecorativeObjectSpawned(DecorativeObjectSpawned event)
+	{
+		trackObject(event.getDecorativeObject());
+	}
+
+	@Subscribe
+	public void onDecorativeObjectDespawned(DecorativeObjectDespawned event)
+	{
+		objectEmitters.remove(event.getDecorativeObject());
+	}
+
+	@Subscribe
+	public void onGroundObjectSpawned(GroundObjectSpawned event)
+	{
+		trackObject(event.getGroundObject());
+	}
+
+	@Subscribe
+	public void onGroundObjectDespawned(GroundObjectDespawned event)
+	{
+		objectEmitters.remove(event.getGroundObject());
+	}
+
+	private void trackObject(TileObject object)
+	{
+		if (profiledObjectIds.contains(object.getId()))
+		{
+			objectEmitters.putIfAbsent(object, new ObjectEmitters());
+		}
+	}
+
+	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
 	{
 		switch (event.getGameState())
 		{
 			case LOADING:
 				// The scene is rebasing; live particles' local coordinates
-				// become meaningless
+				// become meaningless, and scenery respawns with fresh events
 				particleSystem.clear(DISCARD);
 				renderer.reset();
+				objectEmitters.clear();
 				break;
 			case LOGGED_IN:
 				// Player models are rebuilt on scene load and their vertex
@@ -470,6 +579,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			stylesRevision = storeRevision;
 			// Emitters hold style references; re-resolve everyone
 			invalidateResolutions();
+		}
+		if (profiledIdsRevision != storeRevision)
+		{
+			profiledIdsRevision = storeRevision;
+			rebuildProfiledObjects();
 		}
 
 		Player localPlayer = client.getLocalPlayer();
@@ -649,6 +763,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 		}
 
+		processObjects(dt, level, radiusUnits, localLp);
 		updateStackOracle(level);
 		emitProjectiles(dt);
 		particleSystem.update(dt, deathStats);
@@ -1777,42 +1892,505 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		refreshSnapshot();
 	}
 
+	// ==================== Scenery ====================
+
+	/**
+	 * Recompute which object IDs carry profiles and rescan the loaded scene
+	 * for instances. The scene walk is expensive but runs only when the
+	 * profile store changes; spawn events keep the registry current
+	 * otherwise.
+	 */
+	private void rebuildProfiledObjects()
+	{
+		Set<Integer> ids = new HashSet<>();
+		for (EmitterProfile profile : store.snapshotAll().values())
+		{
+			if (profile.isObjectTarget() && profile.getObjectId() >= 0)
+			{
+				ids.add(profile.getObjectId());
+			}
+		}
+		profiledObjectIds = ids;
+		objectEmitters.clear();
+		if (ids.isEmpty())
+		{
+			return;
+		}
+		Scene scene = client.getTopLevelWorldView().getScene();
+		for (Tile[][] plane : scene.getTiles())
+		{
+			for (Tile[] column : plane)
+			{
+				for (Tile tile : column)
+				{
+					if (tile == null)
+					{
+						continue;
+					}
+					GameObject[] gameObjects = tile.getGameObjects();
+					if (gameObjects != null)
+					{
+						for (GameObject gameObject : gameObjects)
+						{
+							if (gameObject != null)
+							{
+								trackObject(gameObject);
+							}
+						}
+					}
+					if (tile.getWallObject() != null)
+					{
+						trackObject(tile.getWallObject());
+					}
+					if (tile.getDecorativeObject() != null)
+					{
+						trackObject(tile.getDecorativeObject());
+					}
+					if (tile.getGroundObject() != null)
+					{
+						trackObject(tile.getGroundObject());
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * Resolve, anchor and emit for tracked scenery. No claim gate applies -
+	 * scenery never participates in the actor dedup - only plane and radius.
+	 */
+	private void processObjects(float dt, int level, int radiusUnits, LocalPoint localLp)
+	{
+		if (objectEmitters.isEmpty())
+		{
+			return;
+		}
+		int revision = store.getRevision();
+		boolean markers = config.showAnchor() && developerMode;
+		for (Map.Entry<TileObject, ObjectEmitters> entry : objectEmitters.entrySet())
+		{
+			TileObject object = entry.getKey();
+			ObjectEmitters oe = entry.getValue();
+			if (object.getPlane() != level
+				|| object.getLocalLocation().distanceTo(localLp) > radiusUnits)
+			{
+				oe.anchorCount = 0;
+				for (ActiveEmitter emitter : oe.emitters)
+				{
+					emitter.carry = 0;
+				}
+				continue;
+			}
+			if (oe.revision != revision)
+			{
+				resolveObject(oe, object, revision);
+			}
+			updateObjectAnchors(oe, object, markers);
+			emitObject(dt, oe);
+		}
+	}
+
+	/**
+	 * Map stored object profiles onto one instance's model, matching by
+	 * object ID plus piece signature.
+	 */
+	private void resolveObject(ObjectEmitters oe, TileObject object, int revision)
+	{
+		oe.revision = revision;
+		oe.emitters.clear();
+		Model model = objectModel(object);
+		if (model == null)
+		{
+			return;
+		}
+		ModelSnapshot snapshot = ModelSnapshot.capture(model);
+		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (!profile.isObjectTarget() || profile.getObjectId() != object.getId()
+				|| !profile.isEnabled() || profile.getVertices().isEmpty()
+				|| (!developerMode && ParticlesPanel.Category.isWip(profile)))
+			{
+				continue;
+			}
+			ParticleStyle style = renderer.getStyle(entry.getKey());
+			if (style == null)
+			{
+				continue;
+			}
+			for (ModelSnapshot.Piece piece : snapshot.getPieces())
+			{
+				if (!piece.getSignature().equals(profile.getSignature()))
+				{
+					continue;
+				}
+				List<Integer> globals = new ArrayList<>();
+				for (int local : profile.getVertices())
+				{
+					if (local >= 0 && local < piece.getVertices().length)
+					{
+						globals.add(piece.getVertices()[local]);
+					}
+				}
+				if (!globals.isEmpty())
+				{
+					int[] vertices = new int[globals.size()];
+					for (int i = 0; i < vertices.length; i++)
+					{
+						vertices[i] = globals.get(i);
+					}
+					oe.emitters.add(new ActiveEmitter(style, vertices, null));
+				}
+				break;
+			}
+		}
+	}
+
+	private void updateObjectAnchors(ObjectEmitters oe, TileObject object, boolean markers)
+	{
+		oe.anchorCount = 0;
+		if (oe.emitters.isEmpty())
+		{
+			return;
+		}
+		Model model = objectModel(object);
+		if (model == null)
+		{
+			return;
+		}
+		int vertexCount = model.getVerticesCount();
+		int total = 0;
+		for (ActiveEmitter emitter : oe.emitters)
+		{
+			total += emitter.vertices.length;
+		}
+		if (oe.anchorXs.length < total)
+		{
+			oe.anchorXs = new float[total];
+			oe.anchorYs = new float[total];
+			oe.anchorZs = new float[total];
+		}
+		LocalPoint lp = object.getLocalLocation();
+		int baseZ = Perspective.getTileHeight(client, lp, object.getPlane());
+		float[] vx = model.getVerticesX();
+		float[] vy = model.getVerticesY();
+		float[] vz = model.getVerticesZ();
+		for (ActiveEmitter emitter : oe.emitters)
+		{
+			emitter.anchorStart = oe.anchorCount;
+			emitter.anchorCount = 0;
+			ParticleStyle style = emitter.style;
+			for (int v : emitter.vertices)
+			{
+				if (v < 0 || v >= vertexCount)
+				{
+					continue;
+				}
+				// Scene models arrive pre-rotated, so offsets apply on world
+				// axes: X east, Y north, Z up
+				oe.anchorXs[oe.anchorCount] = lp.getX() + vx[v] + style.getOffsetX();
+				oe.anchorYs[oe.anchorCount] = lp.getY() + vz[v] + style.getOffsetY();
+				oe.anchorZs[oe.anchorCount] = baseZ + vy[v] - style.getOffsetZ();
+				oe.anchorCount++;
+				emitter.anchorCount++;
+			}
+		}
+		if (markers && oe.anchorCount > 0)
+		{
+			int needed = anchorCount + oe.anchorCount;
+			if (anchorXs.length < needed)
+			{
+				anchorXs = Arrays.copyOf(anchorXs, Math.max(needed, anchorXs.length * 2 + 16));
+				anchorYs = Arrays.copyOf(anchorYs, anchorXs.length);
+				anchorZs = Arrays.copyOf(anchorZs, anchorXs.length);
+			}
+			System.arraycopy(oe.anchorXs, 0, anchorXs, anchorCount, oe.anchorCount);
+			System.arraycopy(oe.anchorYs, 0, anchorYs, anchorCount, oe.anchorCount);
+			System.arraycopy(oe.anchorZs, 0, anchorZs, anchorCount, oe.anchorCount);
+			anchorCount = needed;
+		}
+	}
+
+	private void emitObject(float dt, ObjectEmitters oe)
+	{
+		if (oe.anchorCount == 0)
+		{
+			for (ActiveEmitter emitter : oe.emitters)
+			{
+				emitter.carry = 0;
+			}
+			return;
+		}
+		int budget = config.maxParticles();
+		float densityScale = config.density().getFactor();
+		for (ActiveEmitter emitter : oe.emitters)
+		{
+			if (emitter.anchorCount == 0)
+			{
+				emitter.carry = 0;
+				continue;
+			}
+			ParticleStyle style = emitter.style;
+			float sustainable = budget / style.getLifetimeSec() * 0.95f;
+			float rate = Math.min(style.getParticlesPerSecond() * densityScale, sustainable);
+			emitter.carry += rate * dt;
+			int count = (int) emitter.carry;
+			emitter.carry -= count;
+			for (int i = 0; i < count; i++)
+			{
+				if (particleSystem.getParticles().size() >= budget)
+				{
+					return;
+				}
+				int a = emitter.anchorStart + random.nextInt(emitter.anchorCount);
+				spawnAt(style, oe.anchorXs[a], oe.anchorYs[a], oe.anchorZs[a], 1f);
+			}
+		}
+	}
+
+	@Nullable
+	private static Model objectModel(TileObject object)
+	{
+		if (object instanceof GameObject)
+		{
+			return modelOf(((GameObject) object).getRenderable());
+		}
+		if (object instanceof WallObject)
+		{
+			Model model = modelOf(((WallObject) object).getRenderable1());
+			return model != null ? model : modelOf(((WallObject) object).getRenderable2());
+		}
+		if (object instanceof DecorativeObject)
+		{
+			Model model = modelOf(((DecorativeObject) object).getRenderable());
+			return model != null ? model : modelOf(((DecorativeObject) object).getRenderable2());
+		}
+		if (object instanceof GroundObject)
+		{
+			return modelOf(((GroundObject) object).getRenderable());
+		}
+		return null;
+	}
+
+	@Nullable
+	private static Model modelOf(@Nullable Renderable renderable)
+	{
+		if (renderable instanceof Model)
+		{
+			return (Model) renderable;
+		}
+		if (renderable instanceof DynamicObject)
+		{
+			return ((DynamicObject) renderable).getModel();
+		}
+		return null;
+	}
+
+	/**
+	 * Every scenery instance on one plane of the loaded scene, deduplicated
+	 * (multi-tile objects appear on each covered tile). Dev-tool path only -
+	 * this walks the whole scene.
+	 */
+	private List<TileObject> sceneObjects(int plane)
+	{
+		List<TileObject> out = new ArrayList<>();
+		Set<TileObject> seen = new HashSet<>();
+		Tile[][] tiles = client.getTopLevelWorldView().getScene().getTiles()[plane];
+		for (Tile[] column : tiles)
+		{
+			for (Tile tile : column)
+			{
+				if (tile == null)
+				{
+					continue;
+				}
+				GameObject[] gameObjects = tile.getGameObjects();
+				if (gameObjects != null)
+				{
+					for (GameObject gameObject : gameObjects)
+					{
+						if (gameObject != null && seen.add(gameObject))
+						{
+							out.add(gameObject);
+						}
+					}
+				}
+				if (tile.getWallObject() != null && seen.add(tile.getWallObject()))
+				{
+					out.add(tile.getWallObject());
+				}
+				if (tile.getDecorativeObject() != null && seen.add(tile.getDecorativeObject()))
+				{
+					out.add(tile.getDecorativeObject());
+				}
+				if (tile.getGroundObject() != null && seen.add(tile.getGroundObject()))
+				{
+					out.add(tile.getGroundObject());
+				}
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * Nearby scenery for the viewer's capture list: one entry per object ID,
+	 * nearest instance, sorted by distance. Client thread.
+	 */
+	private List<ModelViewerFrame.ObjectSighting> nearbySightings()
+	{
+		Player player = client.getLocalPlayer();
+		if (player == null)
+		{
+			return List.of();
+		}
+		LocalPoint lp = player.getLocalLocation();
+		Map<Integer, ModelViewerFrame.ObjectSighting> best = new HashMap<>();
+		for (TileObject object : sceneObjects(player.getWorldView().getPlane()))
+		{
+			int dist = object.getLocalLocation().distanceTo(lp) / 128;
+			if (dist > 12)
+			{
+				continue;
+			}
+			ModelViewerFrame.ObjectSighting current = best.get(object.getId());
+			if (current != null && current.distanceTiles <= dist)
+			{
+				continue;
+			}
+			String name = client.getObjectDefinition(object.getId()).getName();
+			if (name == null || name.isEmpty() || name.equals("null"))
+			{
+				continue;
+			}
+			best.put(object.getId(), new ModelViewerFrame.ObjectSighting(object.getId(), name, dist));
+		}
+		List<ModelViewerFrame.ObjectSighting> out = new ArrayList<>(best.values());
+		out.sort((a, b) -> Integer.compare(a.distanceTiles, b.distanceTiles));
+		return out.size() > 30 ? new ArrayList<>(out.subList(0, 30)) : out;
+	}
+
 	// ==================== ModelViewerFrame.Callbacks ====================
 
 	@Override
 	public void refreshSnapshot()
 	{
+		int objectId = viewerObjectId;
 		clientThread.invokeLater(() ->
 		{
-			Player player = client.getLocalPlayer();
-			if (player == null)
+			if (objectId >= 0)
 			{
-				return;
+				captureObjectSnapshot(objectId);
 			}
-			PlayerComposition composition = player.getPlayerComposition();
-			Model model = player.getModel();
-			if (composition == null || model == null)
+			else
 			{
-				return;
+				capturePlayerSnapshot();
 			}
-			ModelSnapshot snapshot = ModelSnapshot.capture(model);
-			List<String> wornItems = new ArrayList<>();
-			for (int itemId : wornItemIds(composition))
+		});
+	}
+
+	@Override
+	public void loadObject(int objectId)
+	{
+		viewerObjectId = objectId;
+		refreshSnapshot();
+	}
+
+	@Override
+	public void playerViewSelected()
+	{
+		if (viewerObjectId != -1)
+		{
+			viewerObjectId = -1;
+			refreshSnapshot();
+		}
+	}
+
+	/**
+	 * Capture the local player's composite into the viewer. Client thread.
+	 */
+	private void capturePlayerSnapshot()
+	{
+		Player player = client.getLocalPlayer();
+		if (player == null)
+		{
+			return;
+		}
+		PlayerComposition composition = player.getPlayerComposition();
+		Model model = player.getModel();
+		if (composition == null || model == null)
+		{
+			return;
+		}
+		ModelSnapshot snapshot = ModelSnapshot.capture(model);
+		List<String> wornItems = new ArrayList<>();
+		for (int itemId : wornItemIds(composition))
+		{
+			wornItems.add(itemId + " - " + client.getItemDefinition(itemId).getName());
+		}
+		List<int[]> recent = recentProjectileList();
+		List<ModelViewerFrame.ObjectSighting> sightings = nearbySightings();
+		SwingUtilities.invokeLater(() ->
+		{
+			viewerSnapshot = snapshot;
+			if (viewerFrame != null)
 			{
-				wornItems.add(itemId + " - " + client.getItemDefinition(itemId).getName());
+				viewerFrame.setSnapshot(snapshot,
+					selectedGlobals(snapshot, viewerFrame.getSelectedProfileKey()),
+					profileEntriesBySignature(), wornItems,
+					projectileProfileEntries(), recent,
+					objectProfileEntries(), sightings);
 			}
-			List<int[]> recent = recentProjectileList();
-			SwingUtilities.invokeLater(() ->
+		});
+	}
+
+	/**
+	 * Capture the nearest instance of this object into the viewer, falling
+	 * back to the player when none is loaded. Client thread.
+	 */
+	private void captureObjectSnapshot(int objectId)
+	{
+		Player player = client.getLocalPlayer();
+		if (player == null)
+		{
+			return;
+		}
+		LocalPoint lp = player.getLocalLocation();
+		TileObject best = null;
+		int bestDist = Integer.MAX_VALUE;
+		for (TileObject object : sceneObjects(player.getWorldView().getPlane()))
+		{
+			if (object.getId() != objectId)
 			{
-				viewerSnapshot = snapshot;
-				if (viewerFrame != null)
-				{
-					viewerFrame.setSnapshot(snapshot,
-						selectedGlobals(snapshot, viewerFrame.getSelectedProfileKey()),
-						profileEntriesBySignature(), wornItems,
-						projectileProfileEntries(), recent);
-				}
-			});
+				continue;
+			}
+			int dist = object.getLocalLocation().distanceTo(lp);
+			if (dist < bestDist)
+			{
+				bestDist = dist;
+				best = object;
+			}
+		}
+		Model model = best == null ? null : objectModel(best);
+		if (model == null)
+		{
+			SwingUtilities.invokeLater(() -> viewerObjectId = -1);
+			capturePlayerSnapshot();
+			return;
+		}
+		ModelSnapshot snapshot = ModelSnapshot.capture(model);
+		List<int[]> recent = recentProjectileList();
+		List<ModelViewerFrame.ObjectSighting> sightings = nearbySightings();
+		SwingUtilities.invokeLater(() ->
+		{
+			viewerSnapshot = snapshot;
+			if (viewerFrame != null)
+			{
+				viewerFrame.setSnapshot(snapshot,
+					selectedGlobals(snapshot, viewerFrame.getSelectedProfileKey()),
+					profileEntriesBySignature(), List.of(),
+					projectileProfileEntries(), recent,
+					objectProfileEntries(), sightings);
+			}
 		});
 	}
 
@@ -1978,6 +2556,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			return existing;
 		}
 		String defaultName = piece.getVertices().length + "v " + piece.getFaces().length + "f";
+		if (viewerObjectId >= 0)
+		{
+			return store.ensureObjectPieceProfile(piece.getSignature(),
+				"obj " + viewerObjectId + " " + defaultName, viewerObjectId);
+		}
 		return store.ensureProfileFor(piece.getSignature(), defaultName);
 	}
 
@@ -1987,19 +2570,33 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (profileKey != null)
 		{
 			EmitterProfile selected = store.snapshotAll().get(profileKey);
-			if (selected != null && piece.getSignature().equals(selected.getSignature()))
+			if (selected != null && piece.getSignature().equals(selected.getSignature())
+				&& matchesViewerContext(selected))
 			{
 				return profileKey;
 			}
 		}
 		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
 		{
-			if (piece.getSignature().equals(entry.getValue().getSignature()))
+			if (piece.getSignature().equals(entry.getValue().getSignature())
+				&& matchesViewerContext(entry.getValue()))
 			{
 				return entry.getKey();
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Does this profile belong to what the viewer is showing - the loaded
+	 * object, or the player? Signatures alone could collide across the two
+	 * families. EDT only.
+	 */
+	private boolean matchesViewerContext(EmitterProfile profile)
+	{
+		return viewerObjectId >= 0
+			? profile.isObjectTarget() && profile.getObjectId() == viewerObjectId
+			: EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType());
 	}
 
 	/**
@@ -2016,7 +2613,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			viewerFrame.selectProfileOnNextSnapshot(selectProfileKey);
 		}
-		viewerFrame.refreshRows(profileEntriesBySignature(), projectileProfileEntries());
+		viewerFrame.refreshRows(profileEntriesBySignature(), projectileProfileEntries(),
+			objectProfileEntries());
 	}
 
 	private void refreshViewerMarkers()
@@ -2100,7 +2698,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
 		{
 			EmitterProfile profile = entry.getValue();
-			if (profile.getSignature() == null)
+			// Only the family the viewer is showing; object and player
+			// profiles both carry signatures
+			if (profile.getSignature() == null || !matchesViewerContext(profile))
 			{
 				continue;
 			}
@@ -2111,12 +2711,37 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		return out;
 	}
 
+	private List<ModelViewerFrame.ProfileEntry> objectProfileEntries()
+	{
+		List<ModelViewerFrame.ProfileEntry> out = new ArrayList<>();
+		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (profile.isObjectTarget())
+			{
+				out.add(new ModelViewerFrame.ProfileEntry(entry.getKey(),
+					profile.getName() + " [obj " + profile.getObjectId() + "]", false));
+			}
+		}
+		return out;
+	}
+
 	/**
 	 * Open the vertex picker with this profile selected, if its piece is on
 	 * the current model. EDT only.
 	 */
 	private void editProfile(String profileKey)
 	{
+		// Object profiles edit against their object's model, not the player's
+		EmitterProfile profile = store.snapshotAll().get(profileKey);
+		if (profile != null && profile.isObjectTarget())
+		{
+			viewerObjectId = profile.getObjectId();
+		}
+		else if (profile != null && !profile.isProjectileTarget())
+		{
+			viewerObjectId = -1;
+		}
 		openViewer();
 		if (viewerFrame != null)
 		{

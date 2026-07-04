@@ -168,7 +168,8 @@ class EmitterStore
 	{
 		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
 		{
-			if (signature.equals(entry.getValue().getSignature()))
+			if (signature.equals(entry.getValue().getSignature())
+				&& EmitterProfile.TARGET_PLAYER.equals(entry.getValue().getTargetType()))
 			{
 				return entry.getKey();
 			}
@@ -202,6 +203,31 @@ class EmitterStore
 			: source.getSignature();
 		String key = freeKey(base);
 		profiles.put(key, copy);
+		save();
+		return key;
+	}
+
+	/**
+	 * @return the key of an existing object profile for this piece signature
+	 * on this object ID, or a newly created one
+	 */
+	synchronized String ensureObjectPieceProfile(String signature, String defaultName, int objectId)
+	{
+		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (profile.isObjectTarget() && profile.getObjectId() == objectId
+				&& signature.equals(profile.getSignature()))
+			{
+				return entry.getKey();
+			}
+		}
+		EmitterProfile profile = new EmitterProfile(defaultName);
+		profile.setTargetType(EmitterProfile.TARGET_OBJECT);
+		profile.setSignature(signature);
+		profile.setObjectId(objectId);
+		String key = freeKey(signature + "@obj" + objectId);
+		profiles.put(key, profile);
 		save();
 		return key;
 	}
