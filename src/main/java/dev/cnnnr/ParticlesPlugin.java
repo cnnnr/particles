@@ -136,6 +136,15 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * Authoring tools (vertex picker, profile edit controls) only exist in
 	 * developer mode; shipped users get read-only presets with toggles.
 	 */
+	/**
+	 * Preview the shipped experience from a developer client: treats
+	 * developer mode as off everywhere (authoring UI, WIP category gating).
+	 * The dev harness always launches with developer mode on, so this is the
+	 * only way to see the player view locally. Safe to ship true by accident
+	 * - players already run without developer mode.
+	 */
+	private static final boolean PREVIEW_PLAYER_VIEW = true;
+
 	@Inject
 	@Named("developerMode")
 	private boolean developerMode;
@@ -306,6 +315,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	@Override
 	protected void startUp() throws Exception
 	{
+		developerMode &= !PREVIEW_PLAYER_VIEW;
 		lastNanos = System.nanoTime();
 		stylesRevision = -1;
 		playerEmitters.clear();
