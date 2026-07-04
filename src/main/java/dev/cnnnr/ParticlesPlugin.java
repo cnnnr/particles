@@ -702,11 +702,6 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				stack.add(p);
 			}
 		}
-		if (stack.size() < 2)
-		{
-			return;
-		}
-
 		String gate;
 		if (key == localClaimKey)
 		{
@@ -802,13 +797,40 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 		}
 
+		// Mirror the scope filters (Apply to, effect radius) the drawn loop
+		// applies before the claim - the claim can approve a player that
+		// scope then excludes, which otherwise reads as a MATCH that fails
+		String scoped = "";
+		if (winner != localPlayer)
+		{
+			ParticlesConfig.ApplyTo applyTo = config.applyTo();
+			if (applyTo == ParticlesConfig.ApplyTo.ME
+				|| (applyTo == ParticlesConfig.ApplyTo.FRIENDS && !winner.isFriend()))
+			{
+				scoped = " SCOPED-OUT(" + applyTo + ")";
+			}
+			else if (localPlayer != null && winner.getLocalLocation()
+				.distanceTo(localPlayer.getLocalLocation()) > config.effectRadius() * 128)
+			{
+				scoped = " SCOPED-OUT(radius " + config.effectRadius() + ")";
+			}
+		}
+
+		// Resolution state: 0 emitters = their gear matched no enabled
+		// preset; emitters but 0 anchors = blocked by the gate or scope
+		PlayerEmitters winnerPe = playerEmitters.get(winner);
+		String emitState = winnerPe == null
+			? "emit -"
+			: "emit " + winnerPe.emitters.size() + "e/" + winnerPe.anchorCount + "a";
+
 		oracleLine = "stack " + stack.size()
 			+ " | drawn " + winner.getName() + (isCentered(winner) ? "" : " (moving)")
 			+ " | gate " + gate
 			+ " | pred " + predText
 			+ " | loIdx " + (lo == null ? "-" : lo.getName())
 			+ " | hiIdx " + (hi == null ? "-" : hi.getName())
-			+ " | idxSrc " + (idxOk ? "ok" : "MISMATCH");
+			+ " | idxSrc " + (idxOk ? "ok" : "MISMATCH")
+			+ " | " + emitState + scoped;
 
 		// One dump per distinct situation, with everything a candidate
 		// precedence rule could depend on
@@ -816,7 +838,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			.append(winner.getName()).append('#').append(menuIndices.getOrDefault(winner, -1))
 			.append(" gate=").append(gate)
 			.append(" pred=").append(predText)
-			.append(" idxOk=").append(idxOk);
+			.append(" idxOk=").append(idxOk)
+			.append(' ').append(emitState).append(scoped);
 		for (Player p : stack)
 		{
 			LocalPoint lp = p.getLocalLocation();
