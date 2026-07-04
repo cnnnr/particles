@@ -14,6 +14,33 @@ public interface ParticlesConfig extends Config
 {
 	String GROUP = "cnnnr-particles";
 
+	enum Density
+	{
+		NORMAL("Normal", 1f),
+		LOW("Low", 0.66f),
+		VERY_LOW("Very low", 0.33f);
+
+		private final String label;
+		private final float factor;
+
+		Density(String label, float factor)
+		{
+			this.label = label;
+			this.factor = factor;
+		}
+
+		float getFactor()
+		{
+			return factor;
+		}
+
+		@Override
+		public String toString()
+		{
+			return label;
+		}
+	}
+
 	@ConfigItem(
 			position = 0,
 			keyName = "hideSidePanel",
@@ -25,9 +52,43 @@ public interface ParticlesConfig extends Config
 		return false;
 	}
 
-	// keyName predates the rename; changing it would reset users' setting
 	@ConfigItem(
 		position = 1,
+		keyName = "justMe",
+		name = "Just me",
+		description = "Only emit particles on your own character"
+	)
+	default boolean justMe()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		position = 2,
+		keyName = "density",
+		name = "Particle density",
+		description = "Scales every preset's emission rate; lower for calmer effects or more FPS"
+	)
+	default Density density()
+	{
+		return Density.NORMAL;
+	}
+
+	@Range(min = 2, max = 64)
+	@ConfigItem(
+		position = 3,
+		keyName = "effectRadius",
+		name = "Effect radius",
+		description = "Only players within this many tiles of you emit particles"
+	)
+	default int effectRadius()
+	{
+		return 32;
+	}
+
+	// keyName predates the rename; changing it would reset users' setting
+	@ConfigItem(
+		position = 5,
 		keyName = "showAnchor",
 		name = "Show Debug Text",
 		description = "Draw a diagnostics line with live particle counts (plus emitter markers in developer mode)"
@@ -39,7 +100,7 @@ public interface ParticlesConfig extends Config
 
 	@Range(min = 128, max = 8192)
 	@ConfigItem(
-		position = 2,
+		position = 4,
 		keyName = "maxParticles",
 		name = "Max live particles",
 		description = "Total particle budget across all emitters; higher values cost FPS"

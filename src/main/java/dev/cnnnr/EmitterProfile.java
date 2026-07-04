@@ -103,9 +103,13 @@ class EmitterProfile
 	 */
 	private int depthBias = 0;
 	/**
-	 * Halve particle lifetime while the wearer's run pose animation is
-	 * playing, keeping fast-moving plumes tight instead of smearing a tile
-	 * behind the player.
+	 * Percent of normal particle lifetime while the wearer's walk or run
+	 * pose animation is playing (10-100). Shortening it keeps fast-moving
+	 * plumes tight instead of smearing a tile behind the player.
+	 */
+	private int movementLifetime = 100;
+	/**
+	 * Legacy flag, migrated into {@link #movementLifetime} on load.
 	 */
 	private boolean dynamicLifetime = false;
 	/**
@@ -162,7 +166,7 @@ class EmitterProfile
 		spawnJitter = other.spawnJitter;
 		featherStrength = other.featherStrength;
 		depthBias = other.depthBias;
-		dynamicLifetime = other.dynamicLifetime;
+		movementLifetime = other.movementLifetime;
 		offsetX = other.offsetX;
 		offsetY = other.offsetY;
 		offsetZ = other.offsetZ;

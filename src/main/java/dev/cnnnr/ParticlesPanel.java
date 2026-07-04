@@ -105,7 +105,8 @@ class ParticlesPanel extends PluginPanel
 	private Set<String> presentSignatures = Set.of();
 
 	ParticlesPanel(boolean developerMode, Runnable openViewer, BiConsumer<String, Boolean> onToggleProfile,
-		Consumer<String> onDeleteProfile, Consumer<String> onRenameProfile, Consumer<String> onEditProfile)
+		Consumer<Boolean> onToggleAll, Consumer<String> onDeleteProfile, Consumer<String> onRenameProfile,
+		Consumer<String> onEditProfile)
 	{
 		this.developerMode = developerMode;
 		this.onToggleProfile = onToggleProfile;
@@ -117,20 +118,36 @@ class ParticlesPanel extends PluginPanel
 		setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 		profileList.setLayout(new BoxLayout(profileList, BoxLayout.Y_AXIS));
 
+		JButton enableAll = new JButton("Enable all");
+		enableAll.setToolTipText("Turn on every preset");
+		enableAll.addActionListener(e -> onToggleAll.accept(true));
+
+		JButton disableAll = new JButton("Disable all");
+		disableAll.setToolTipText("Turn off every preset");
+		disableAll.addActionListener(e -> onToggleAll.accept(false));
+
 		JButton support = new JButton("Support",
 			new ImageIcon(ImageUtil.loadImageResource(ParticlesPlugin.class, "/support.png")));
 		support.setToolTipText("Thank you! <3");
 		support.addActionListener(e -> LinkBrowser.browse("https://buymeacoffee.com/cnnnr"));
 
-		JPanel controls = new JPanel(new GridLayout(0, 1, 0, 6));
-		controls.add(support);
-
+		JPanel buttons = new JPanel(new GridLayout(2, 2, 4, 4));
+		buttons.add(enableAll);
+		buttons.add(disableAll);
+		buttons.add(support);
 		if (developerMode)
 		{
-			JButton open = new JButton("Open vertex picker");
+			JButton open = new JButton("Vertex picker");
 			open.addActionListener(e -> openViewer.run());
-			controls.add(open);
+			buttons.add(open);
 		}
+		else
+		{
+			buttons.add(new JLabel());
+		}
+
+		JPanel controls = new JPanel(new GridLayout(0, 1, 0, 6));
+		controls.add(buttons);
 
 		searchBar.setIcon(IconTextField.Icon.SEARCH);
 		// IconTextField paints no background until its focus/hover listeners

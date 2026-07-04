@@ -105,6 +105,15 @@ class EmitterStore
 					{
 						profile.setTargetType(EmitterProfile.TARGET_PLAYER);
 					}
+					// Migration: dynamic lifetime flag became a movement percent
+					if (profile.isDynamicLifetime())
+					{
+						if (profile.getMovementLifetime() == 100)
+						{
+							profile.setMovementLifetime(50);
+						}
+						profile.setDynamicLifetime(false);
+					}
 				});
 			}
 		}
@@ -332,6 +341,26 @@ class EmitterStore
 		if (profile != null && profile.isEnabled() != enabled)
 		{
 			profile.setEnabled(enabled);
+			save();
+		}
+	}
+
+	/**
+	 * Flip every profile at once with a single config write.
+	 */
+	synchronized void setAllEnabled(boolean enabled)
+	{
+		boolean changed = false;
+		for (EmitterProfile profile : profiles.values())
+		{
+			if (profile.isEnabled() != enabled)
+			{
+				profile.setEnabled(enabled);
+				changed = true;
+			}
+		}
+		if (changed)
+		{
 			save();
 		}
 	}

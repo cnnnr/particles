@@ -327,8 +327,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 		overlayManager.add(overlay);
 
-		panel = new ParticlesPanel(developerMode, this::openViewer, store::setEnabled, store::delete,
-			this::renameProfile, this::editProfile);
+		panel = new ParticlesPanel(developerMode, this::openViewer, store::setEnabled, store::setAllEnabled,
+			store::delete, this::renameProfile, this::editProfile);
 		navButton = NavigationButton.builder()
 			.tooltip("Particles")
 			.icon(createIcon())
@@ -532,6 +532,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 		}
 
+		boolean justMe = config.justMe();
+		int radiusUnits = config.effectRadius() * 128;
+		LocalPoint localLp = localPlayer.getLocalLocation();
+
 		// Every provably drawn player emits, not just the local one.
 		// players() spans all four planes of the scene, but the client only
 		// draws the current one - other planes must not emit at all.
@@ -547,7 +551,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				continue;
 			}
 			boolean drawn;
-			if (player.getWorldLocation().getPlane() != level)
+			if (player != localPlayer
+				&& (justMe || player.getLocalLocation().distanceTo(localLp) > radiusUnits))
+			{
+				// Out of scope by user preference; the hidden branch below
+				// still clears their state so re-entry starts clean
+				drawn = false;
+			}
+			else if (player.getWorldLocation().getPlane() != level)
 			{
 				drawn = false;
 			}
@@ -1142,12 +1153,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			lastActionAnimation = actionAnimation != -1 ? actionAnimation : lastActionAnimation;
 		}
-		// Dynamic lifetime: at run speed a full-lifetime plume smears a tile
-		// behind the wearer, so flagged profiles halve it while THIS player's
-		// movement animation is playing (weapon-specific run poses included)
+		// Movement lifetime: a full-lifetime plume smears a tile behind a
+		// moving wearer, so profiles can shorten it while THIS player's walk
+		// or run pose animation is playing (weapon-specific poses included)
 		boolean moving = poseAnimation == player.getRunAnimation() || poseAnimation == player.getWalkAnimation();
 
 		int budget = config.maxParticles();
+		float densityScale = config.density().getFactor();
 		for (ActiveEmitter emitter : pe.emitters)
 		{
 			if (emitter.anchorCount == 0)
@@ -1166,12 +1178,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			// Time-based emission, throttled to what the budget can sustain:
 			// outrunning it makes births and deaths synchronize into waves
 			float sustainable = budget / style.getLifetimeSec() * 0.95f;
-			float rate = Math.min(style.getParticlesPerSecond(), sustainable);
+			float rate = Math.min(style.getParticlesPerSecond() * densityScale, sustainable);
 			emitter.carry += rate * dt;
 			int count = (int) emitter.carry;
 			emitter.carry -= count;
 
-			float lifeScale = style.isDynamicLifetime() && moving ? 0.5f : 1f;
+			float lifeScale = moving ? style.getMovementLifetimeScale() : 1f;
 			boolean feathered = style.getFeatherStrength() > 0 && emitter.chains != null
 				&& emitter.anchorCount == emitter.vertices.length;
 			for (int i = 0; i < count; i++)
@@ -1193,7 +1205,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 			// Distance-based emission: spread spawns evenly along each
 			// anchor's movement this tick, for ribbon-like weapon trails
-			float density = style.getTrailDensity();
+			float density = style.getTrailDensity() * densityScale;
 			if (density <= 0)
 			{
 				continue;
@@ -1326,6 +1338,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		projectileStamp++;
 		long nowMs = System.currentTimeMillis();
 		int budget = config.maxParticles();
+		float densityScale = config.density().getFactor();
 
 		for (Projectile projectile : client.getProjectiles())
 		{
@@ -1368,7 +1381,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 				// Time-based emission, spread along this tick's movement
 				float sustainable = budget / style.getLifetimeSec() * 0.95f;
-				carries[0] += Math.min(style.getParticlesPerSecond(), sustainable) * dt;
+				carries[0] += Math.min(style.getParticlesPerSecond() * densityScale, sustainable) * dt;
 				int count = (int) carries[0];
 				carries[0] -= count;
 				for (int i = 0; i < count; i++)
@@ -1384,7 +1397,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				// Distance-based ribbon emission
 				if (style.getTrailDensity() > 0 && segment)
 				{
-					double owed = carries[1] + Math.sqrt(distSq) / 128f * style.getTrailDensity();
+					double owed = carries[1] + Math.sqrt(distSq) / 128f * style.getTrailDensity() * densityScale;
 					int n = (int) owed;
 					carries[1] = owed - n;
 					for (int i = 0; i < n; i++)
