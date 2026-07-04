@@ -198,23 +198,31 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	private final Map<Player, PlayerEmitters> playerEmitters = new HashMap<>();
 	private int playerStamp;
 	/**
-	 * Provable-visibility gate for the engine's stacked-actor dedup
-	 * (tileLastDrawnActor): emit only when the engine PROVABLY draws the
-	 * player - movers, the local player, and sole centered tile occupants.
-	 * Contested tiles stay silent rather than risk emitting for a hidden
-	 * player; exact stack winners aren't reliably reconstructible from
-	 * plugin-visible state. Reused per tick.
+	 * Mirror of the engine's stacked-actor claim (tileLastDrawnActor): among
+	 * players standing exactly at tile center, one draws per tile, with
+	 * precedence local player -> the local player's player combat target ->
+	 * size-1 centered NPCs -> remaining players by ascending player index.
+	 * Field-validated with the hover-menu oracle (see updateStackOracle):
+	 * idle stacks matched ascending Player.getId() consistently, and getId()
+	 * agreed with the menu identifiers everywhere tested. This map holds the
+	 * lowest-index centered player per tile; the precedence layers above it
+	 * are applied in the drawn gate. Reused per tick.
 	 */
 	private final Map<Long, Player> tileOwners = new HashMap<>();
 	/**
-	 * Tiles where two or more centered players overlap this tick.
-	 */
-	private final Set<Long> contestedTiles = new HashSet<>();
-	/**
 	 * Tiles claimed by a size-1 NPC standing at their center; the engine's
-	 * NPC pass runs before other players, so those players aren't drawn.
+	 * NPC pass runs before non-local players, so those players aren't drawn.
 	 */
 	private final Set<Long> npcClaimedTiles = new HashSet<>();
+	/**
+	 * This tick's higher-precedence claims: the local player's tile beats
+	 * everyone on it, and their player combat target's tile beats NPC claims
+	 * and index order.
+	 */
+	private long localClaimKey = Long.MIN_VALUE;
+	private long targetClaimKey = Long.MIN_VALUE;
+	@Nullable
+	private Player localClaimTarget;
 
 	// Debug marker aggregate across all players, read by the overlay; only
 	// filled while markers are shown. Client thread.
@@ -492,15 +500,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		anchorCount = 0;
 		featherDebugPaths.clear();
 
-		// Provable-visibility gate against the engine's stacked-actor dedup
-		// (tileLastDrawnActor / tileLastOccupiedCycle): the dedup only
-		// applies to actors standing exactly at tile center, so movers and
-		// the local player are always drawn, and a sole centered occupant of
-		// an NPC-free tile is always drawn. Contested tiles are left silent -
-		// the engine's exact winner isn't reliably reconstructible here.
+		// Stacked-actor claim mirror (tileLastDrawnActor /
+		// tileLastOccupiedCycle): the engine's dedup only applies to actors
+		// standing exactly at tile center - movers and the local player
+		// always draw. The winner precedence below was field-validated with
+		// the hover-menu oracle after the original deob-derived mirror
+		// failed; see updateStackOracle.
 		playerStamp++;
 		tileOwners.clear();
-		contestedTiles.clear();
 		npcClaimedTiles.clear();
 
 		for (NPC npc : client.getTopLevelWorldView().npcs())
@@ -535,11 +542,20 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				continue;
 			}
 			long key = tileKey(player);
-			if (tileOwners.putIfAbsent(key, player) != null)
+			Player current = tileOwners.get(key);
+			if (current == null || player.getId() < current.getId())
 			{
-				contestedTiles.add(key);
+				tileOwners.put(key, player);
 			}
 		}
+
+		localClaimKey = isCentered(localPlayer) ? tileKey(localPlayer) : Long.MIN_VALUE;
+		localClaimTarget = localPlayer.getInteracting() instanceof Player
+			? (Player) localPlayer.getInteracting() : null;
+		targetClaimKey = localClaimTarget != null
+			&& localClaimTarget.getWorldLocation().getPlane() == level
+			&& isCentered(localClaimTarget)
+			? tileKey(localClaimTarget) : Long.MIN_VALUE;
 
 		boolean justMe = config.justMe();
 		int radiusUnits = config.effectRadius() * 128;
@@ -577,10 +593,25 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 			else
 			{
+				// Engine claim precedence for a centered stack member; movers
+				// and the local player were already granted above
 				long key = tileKey(player);
-				drawn = !contestedTiles.contains(key)
-					&& !npcClaimedTiles.contains(key)
-					&& tileOwners.get(key) == player;
+				if (key == localClaimKey)
+				{
+					drawn = false;
+				}
+				else if (key == targetClaimKey)
+				{
+					drawn = player == localClaimTarget;
+				}
+				else if (npcClaimedTiles.contains(key))
+				{
+					drawn = false;
+				}
+				else
+				{
+					drawn = tileOwners.get(key) == player;
+				}
 			}
 			if (!drawn)
 			{
@@ -667,9 +698,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		}
 
 		String gate;
-		if (contestedTiles.contains(key))
+		if (key == localClaimKey)
 		{
-			gate = "silent-contested";
+			gate = "local";
+		}
+		else if (key == targetClaimKey && localClaimTarget != null)
+		{
+			gate = localClaimTarget.getName();
 		}
 		else if (npcClaimedTiles.contains(key))
 		{
@@ -737,8 +772,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				predWhy = "idx";
 			}
 		}
+		// Menus never list the local player, so when we predict ourselves the
+		// oracle cannot confirm it - that is blindness, not a falsification
 		String predText = (pred == null ? predWhy : pred.getName() + "[" + predWhy + "]")
-			+ (!isCentered(winner) ? " n/a-moving" : pred == winner ? " MATCH" : " MISS");
+			+ (!isCentered(winner) ? " n/a-moving"
+			: pred == winner ? " MATCH"
+			: pred == localPlayer ? " oracle-blind-self"
+			: " MISS");
 
 		// Does the scene-wide index source agree with the menu identifiers?
 		// A disagreement here would explain the old engine-mirror failures.
