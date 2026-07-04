@@ -463,14 +463,15 @@ class EmitterStore
 	}
 
 	/**
-	 * Flip every profile at once with a single config write.
+	 * Flip a set of profiles at once with a single config write.
 	 */
-	synchronized void setAllEnabled(boolean enabled)
+	synchronized void setEnabledAll(Collection<String> profileKeys, boolean enabled)
 	{
 		boolean changed = false;
-		for (EmitterProfile profile : profiles.values())
+		for (String profileKey : profileKeys)
 		{
-			if (profile.isEnabled() != enabled)
+			EmitterProfile profile = profiles.get(profileKey);
+			if (profile != null && profile.isEnabled() != enabled)
 			{
 				profile.setEnabled(enabled);
 				changed = true;

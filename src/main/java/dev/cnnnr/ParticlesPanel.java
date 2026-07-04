@@ -3,10 +3,13 @@ package dev.cnnnr;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -114,8 +117,8 @@ class ParticlesPanel extends PluginPanel
 	private Set<String> presentSignatures = Set.of();
 
 	ParticlesPanel(boolean developerMode, Runnable openViewer, BiConsumer<String, Boolean> onToggleProfile,
-		Consumer<Boolean> onToggleAll, Consumer<String> onDeleteProfile, Consumer<String> onRenameProfile,
-		Consumer<String> onEditProfile)
+		BiConsumer<Set<String>, Boolean> onToggleMany, Consumer<String> onDeleteProfile,
+		Consumer<String> onRenameProfile, Consumer<String> onEditProfile)
 	{
 		this.developerMode = developerMode;
 		this.onToggleProfile = onToggleProfile;
@@ -127,36 +130,20 @@ class ParticlesPanel extends PluginPanel
 		setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 		profileList.setLayout(new BoxLayout(profileList, BoxLayout.Y_AXIS));
 
-		JButton enableAll = new JButton("Enable all");
-		enableAll.setToolTipText("Turn on every preset");
-		enableAll.addActionListener(e -> onToggleAll.accept(true));
-
-		JButton disableAll = new JButton("Disable all");
-		disableAll.setToolTipText("Turn off every preset");
-		disableAll.addActionListener(e -> onToggleAll.accept(false));
-
-		JButton support = new JButton("Support",
-			new ImageIcon(ImageUtil.loadImageResource(ParticlesPlugin.class, "/support.png")));
+		JButton support = new JButton(new ImageIcon(ImageUtil.loadImageResource(ParticlesPlugin.class, "/support.png")));
 		support.setToolTipText("Thank you! <3");
 		support.addActionListener(e -> LinkBrowser.browse("https://buymeacoffee.com/cnnnr"));
 
-		JPanel buttons = new JPanel(new GridLayout(2, 2, 4, 4));
-		buttons.add(enableAll);
-		buttons.add(disableAll);
-		buttons.add(support);
-		if (developerMode)
-		{
-			JButton open = new JButton("Vertex picker");
-			open.addActionListener(e -> openViewer.run());
-			buttons.add(open);
-		}
-		else
-		{
-			buttons.add(new JLabel());
-		}
+		JButton enableAll = new JButton("Enable all");
+		enableAll.setToolTipText("Turn on every preset in the selected tab");
+		enableAll.addActionListener(e -> onToggleMany.accept(filteredKeys(), true));
 
-		JPanel controls = new JPanel(new GridLayout(0, 1, 0, 6));
-		controls.add(buttons);
+		JButton disableAll = new JButton("Disable all");
+		disableAll.setToolTipText("Turn off every preset in the selected tab");
+		disableAll.addActionListener(e -> onToggleMany.accept(filteredKeys(), false));
+
+		JPanel controls = new JPanel();
+		controls.setLayout(new BoxLayout(controls, BoxLayout.Y_AXIS));
 
 		searchBar.setIcon(IconTextField.Icon.SEARCH);
 		// IconTextField paints no background until its focus/hover listeners
@@ -184,7 +171,31 @@ class ParticlesPanel extends PluginPanel
 			}
 		});
 		searchBar.addClearListener(this::render);
-		controls.add(searchBar);
+
+		// Search takes three quarters of the top row, the support heart the rest
+		JPanel topRow = new JPanel(new GridBagLayout());
+		GridBagConstraints gbc = new GridBagConstraints();
+		gbc.fill = GridBagConstraints.BOTH;
+		gbc.weighty = 1;
+		gbc.weightx = 0.75;
+		topRow.add(searchBar, gbc);
+		gbc.weightx = 0.25;
+		gbc.insets = new Insets(0, 4, 0, 0);
+		topRow.add(support, gbc);
+		topRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+		controls.add(topRow);
+		controls.add(Box.createVerticalStrut(6));
+
+		if (developerMode)
+		{
+			JButton open = new JButton("Vertex picker");
+			open.addActionListener(e -> openViewer.run());
+			JPanel openRow = new JPanel(new BorderLayout());
+			openRow.add(open, BorderLayout.CENTER);
+			openRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+			controls.add(openRow);
+			controls.add(Box.createVerticalStrut(6));
+		}
 
 		MaterialTabGroup tabGroup = new MaterialTabGroup();
 		// Three equal tabs per row, wrapping like the button grid above
@@ -204,12 +215,38 @@ class ParticlesPanel extends PluginPanel
 				tabGroup.select(tab);
 			}
 		}
+		tabGroup.setAlignmentX(Component.LEFT_ALIGNMENT);
 		controls.add(tabGroup);
+		controls.add(Box.createVerticalStrut(6));
+
+		JPanel bulkRow = new JPanel(new GridLayout(1, 2, 4, 0));
+		bulkRow.add(enableAll);
+		bulkRow.add(disableAll);
+		bulkRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+		controls.add(bulkRow);
 
 		JPanel north = new JPanel(new BorderLayout(0, 8));
 		north.add(controls, BorderLayout.NORTH);
 		add(north, BorderLayout.NORTH);
 		add(profileList, BorderLayout.CENTER);
+	}
+
+	/**
+	 * Keys of the profiles the currently-selected tab shows (ignoring the
+	 * search text), for the bulk enable and disable buttons.
+	 */
+	private Set<String> filteredKeys()
+	{
+		Set<String> keys = new HashSet<>();
+		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
+		{
+			EmitterProfile profile = entry.getValue();
+			if (category.matches(profile) && (developerMode || !Category.isWip(profile)))
+			{
+				keys.add(entry.getKey());
+			}
+		}
+		return keys;
 	}
 
 	/**
