@@ -1,6 +1,7 @@
 package dev.cnnnr;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.GridLayout;
 import java.awt.Insets;
@@ -45,9 +46,10 @@ class ParticlesPanel extends PluginPanel
 
 		private final String label;
 		/**
-		 * Work-in-progress category: outside developer mode its tab is hidden,
-		 * its profiles vanish from the sidebar, and they are force-disabled at
-		 * emission time. Flip to false when the category is ready to ship.
+		 * Work-in-progress category: outside developer mode its tab shows a
+		 * Coming soon placeholder, its profiles vanish from the sidebar, and
+		 * they are force-disabled at emission time. Flip to false when the
+		 * category is ready to ship.
 		 */
 		private final boolean wip;
 
@@ -157,10 +159,6 @@ class ParticlesPanel extends PluginPanel
 		tabGroup.setLayout(new GridLayout(1, 0, 4, 0));
 		for (Category value : Category.values())
 		{
-			if (value.wip && !developerMode)
-			{
-				continue;
-			}
 			MaterialTab tab = new MaterialTab(value.label, tabGroup, new JPanel());
 			tab.setOnSelectEvent(() ->
 			{
@@ -200,6 +198,17 @@ class ParticlesPanel extends PluginPanel
 	private void render()
 	{
 		profileList.removeAll();
+
+		if (!developerMode && category.wip)
+		{
+			JLabel comingSoon = new JLabel("Coming soon!");
+			comingSoon.setForeground(Color.GRAY);
+			comingSoon.setAlignmentX(Component.LEFT_ALIGNMENT);
+			profileList.add(comingSoon);
+			profileList.revalidate();
+			profileList.repaint();
+			return;
+		}
 
 		String query = searchBar.getText() == null ? "" : searchBar.getText().trim().toLowerCase();
 		List<Map.Entry<String, EmitterProfile>> entries = new ArrayList<>(profiles.entrySet());
