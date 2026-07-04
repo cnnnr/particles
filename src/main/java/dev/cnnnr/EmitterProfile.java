@@ -96,6 +96,13 @@ class EmitterProfile
 	 */
 	private int featherStrength = 0;
 	/**
+	 * Nudge particles this many local units toward the camera at render
+	 * time. Garment faces that win by render priority (a cape over a skirt)
+	 * would otherwise swallow particles by plain depth; a small bias lets
+	 * particles ride on top the way their host piece does.
+	 */
+	private int depthBias = 0;
+	/**
 	 * Legacy on/off flag, migrated into {@link #featherStrength} on load.
 	 */
 	private boolean feather = false;
@@ -148,6 +155,7 @@ class EmitterProfile
 		spreadSpeed = other.spreadSpeed;
 		spawnJitter = other.spawnJitter;
 		featherStrength = other.featherStrength;
+		depthBias = other.depthBias;
 		offsetX = other.offsetX;
 		offsetY = other.offsetY;
 		offsetZ = other.offsetZ;

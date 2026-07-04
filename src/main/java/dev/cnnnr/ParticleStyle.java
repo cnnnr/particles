@@ -42,6 +42,10 @@ class ParticleStyle
 	private final float spawnJitter;
 	private final int featherStrength;
 	/**
+	 * Camera-ward render nudge in local units; see EmitterProfile.
+	 */
+	private final float depthBias;
+	/**
 	 * Fixed emit offset from the vertex in model space, applied before the
 	 * player's facing rotation so it turns with them. X sideways, Y
 	 * forward/back, Z up (positive).
@@ -70,6 +74,7 @@ class ParticleStyle
 		this.spreadSpeed = profile.getSpreadSpeed();
 		this.spawnJitter = profile.getSpawnJitter();
 		this.featherStrength = profile.getFeatherStrength();
+		this.depthBias = profile.getDepthBias();
 		this.offsetX = profile.getOffsetX();
 		this.offsetY = profile.getOffsetY();
 		this.offsetZ = profile.getOffsetZ();

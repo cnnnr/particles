@@ -515,14 +515,25 @@ class ParticleRenderer
 		int fade = fadeStep(p.lifeFraction());
 
 		int vertexBase = slot * templateVertexCount;
+		float dx = p.getX() - canvas.centerLp.getX();
+		float dy = p.getZ() - canvas.centerHeight;
+		float dz = p.getY() - canvas.centerLp.getY();
+
+		// Nudge toward the camera so garment faces that beat their neighbors
+		// by render priority (a cape over a skirt) don't swallow particles
+		float bias = style.getDepthBias();
+		if (bias > 0)
+		{
+			dx += bias * sinYaw * cosPitch;
+			dy -= bias * sinPitch;
+			dz -= bias * cosYaw * cosPitch;
+		}
+
 		// Clamp into the bounds volume the canvas was built over; vertices
 		// outside the once-computed model radius break the GPU depth sort
-		float dx = clamp(p.getX() - canvas.centerLp.getX(),
-			-VOLUME_HORIZONTAL + CLAMP_MARGIN, VOLUME_HORIZONTAL - CLAMP_MARGIN);
-		float dy = clamp(p.getZ() - canvas.centerHeight,
-			VOLUME_UP + CLAMP_MARGIN, VOLUME_DOWN - CLAMP_MARGIN);
-		float dz = clamp(p.getY() - canvas.centerLp.getY(),
-			-VOLUME_HORIZONTAL + CLAMP_MARGIN, VOLUME_HORIZONTAL - CLAMP_MARGIN);
+		dx = clamp(dx, -VOLUME_HORIZONTAL + CLAMP_MARGIN, VOLUME_HORIZONTAL - CLAMP_MARGIN);
+		dy = clamp(dy, VOLUME_UP + CLAMP_MARGIN, VOLUME_DOWN - CLAMP_MARGIN);
+		dz = clamp(dz, -VOLUME_HORIZONTAL + CLAMP_MARGIN, VOLUME_HORIZONTAL - CLAMP_MARGIN);
 
 		ModelData sizeTemplate = style.getTemplates()[size][0];
 		float[] sx = sizeTemplate.getVerticesX();
@@ -628,8 +639,11 @@ class ParticleRenderer
 						[p.getSizeVariant()][fadeStep(p.lifeFraction())]
 						.shallowCopy()
 						.cloneVertices();
+					float bias = p.getStyle().getDepthBias();
 					transformLegacy(md, sinYaw, cosYaw, sinPitch, cosPitch,
-						p.getX() - centerX, p.getZ() - centerHeight, p.getY() - centerY);
+						p.getX() - centerX + bias * sinYaw * cosPitch,
+						p.getZ() - centerHeight - bias * sinPitch,
+						p.getY() - centerY - bias * cosYaw * cosPitch);
 					parts[i] = md;
 					lastBatchedVertices += templateVertexCount;
 				}
