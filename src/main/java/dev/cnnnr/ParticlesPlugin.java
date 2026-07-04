@@ -369,6 +369,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	private int viewerObjectId = -1;
 	private int viewerNpcId = -1;
 	private int viewerGraphicId = -1;
+	/**
+	 * Game name of the loaded object or NPC, resolved at capture time on the
+	 * client thread; null when unavailable. New profiles are named after it.
+	 * EDT only.
+	 */
+	@Nullable
+	private String viewerTargetName;
 
 	/**
 	 * Piece signatures present on the currently worn model; written on the
@@ -3034,6 +3041,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		SwingUtilities.invokeLater(() ->
 		{
 			viewerSnapshot = snapshot;
+			viewerTargetName = null;
 			if (viewerFrame != null)
 			{
 				viewerFrame.setSnapshot(snapshot,
@@ -3081,8 +3089,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			capturePlayerSnapshot();
 			return;
 		}
-		ModelSnapshot snapshot = ModelSnapshot.capture(model);
-		pushNonPlayerSnapshot(snapshot);
+		String name = cleanTargetName(client.getObjectDefinition(objectId).getName());
+		pushNonPlayerSnapshot(ModelSnapshot.capture(model), name);
 	}
 
 	/**
@@ -3119,8 +3127,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			capturePlayerSnapshot();
 			return;
 		}
-		ModelSnapshot snapshot = ModelSnapshot.capture(model);
-		pushNonPlayerSnapshot(snapshot);
+		String name = cleanTargetName(best.getName());
+		pushNonPlayerSnapshot(ModelSnapshot.capture(model), name);
 	}
 
 	/**
@@ -3167,7 +3175,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			capturePlayerSnapshot();
 			return;
 		}
-		pushNonPlayerSnapshot(ModelSnapshot.capture(model));
+		pushNonPlayerSnapshot(ModelSnapshot.capture(model), null);
 	}
 
 	@Nullable
@@ -3184,9 +3192,24 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	}
 
 	/**
-	 * Push an object or NPC snapshot to the viewer. Client thread.
+	 * A usable game name, or null: strips color tags and rejects the
+	 * cache's "null" placeholder.
 	 */
-	private void pushNonPlayerSnapshot(ModelSnapshot snapshot)
+	@Nullable
+	private static String cleanTargetName(@Nullable String name)
+	{
+		if (name == null)
+		{
+			return null;
+		}
+		String clean = net.runelite.client.util.Text.removeTags(name).trim();
+		return clean.isEmpty() || clean.equals("null") ? null : clean;
+	}
+
+	/**
+	 * Push an object, NPC or graphic snapshot to the viewer. Client thread.
+	 */
+	private void pushNonPlayerSnapshot(ModelSnapshot snapshot, @Nullable String targetName)
 	{
 		List<int[]> recent = recentProjectileList();
 		List<ModelViewerFrame.ObjectSighting> sightings = nearbySightings();
@@ -3195,6 +3218,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		SwingUtilities.invokeLater(() ->
 		{
 			viewerSnapshot = snapshot;
+			viewerTargetName = targetName;
 			if (viewerFrame != null)
 			{
 				viewerFrame.setSnapshot(snapshot,
@@ -3370,15 +3394,19 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			return existing;
 		}
 		String defaultName = piece.getVertices().length + "v " + piece.getFaces().length + "f";
+		// Prefer the game name captured with the snapshot; fall back to the
+		// old id/verts/faces naming when the cache offers none
 		if (viewerObjectId >= 0)
 		{
 			return store.ensureObjectPieceProfile(piece.getSignature(),
-				"obj " + viewerObjectId + " " + defaultName, viewerObjectId);
+				viewerTargetName != null ? viewerTargetName : "obj " + viewerObjectId + " " + defaultName,
+				viewerObjectId);
 		}
 		if (viewerNpcId >= 0)
 		{
 			return store.ensureNpcPieceProfile(piece.getSignature(),
-				"npc " + viewerNpcId + " " + defaultName, viewerNpcId);
+				viewerTargetName != null ? viewerTargetName : "npc " + viewerNpcId + " " + defaultName,
+				viewerNpcId);
 		}
 		if (viewerGraphicId >= 0)
 		{
