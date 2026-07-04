@@ -184,6 +184,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		 * of a stacked tile.
 		 */
 		int arrivalSeq;
+		/**
+		 * The player's engine index, the other stacked-owner signal.
+		 */
+		int playerId;
 	}
 
 	private final Map<Player, PlayerEmitters> playerEmitters = new HashMap<>();
@@ -195,6 +199,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * with no visible owner. Reused per tick.
 	 */
 	private final Map<Long, Player> tileOwners = new HashMap<>();
+	/**
+	 * Tiles occupied by more than one player this tick.
+	 */
+	private final Set<Long> contestedTiles = new HashSet<>();
 
 	// Debug marker aggregate across all players, read by the overlay; only
 	// filled while markers are shown. Client thread.
@@ -417,13 +425,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		featherDebugPaths.clear();
 
 		// One emitting player per tile: the client shows a single model for a
-		// stack, so only its owner should emit. The engine processes actors
-		// in the order they entered the local view (not index order), and the
-		// earliest-arrived player of a stack paints on top - so the earliest
-		// arrival owns the tile. The local player is known to render atop
-		// stacks they stand in, so they always win their own tile.
+		// stack, so only its owner should emit. The engine's true stacked
+		// draw order isn't exposed, so the election rule is configurable
+		// while it's pinned down empirically. The local player is known to
+		// render atop stacks they stand in, so they always win their own tile.
+		ParticlesConfig.StackOwnerRule stackRule = config.stackOwnerRule();
 		playerStamp++;
 		tileOwners.clear();
+		contestedTiles.clear();
 		for (Player player : client.getTopLevelWorldView().players())
 		{
 			if (player == null)
@@ -437,12 +446,21 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				return created;
 			});
 			pe.stamp = playerStamp;
+			pe.playerId = player.getId();
 
 			long key = tileKey(player);
 			Player current = tileOwners.get(key);
-			if (current == null || pe.arrivalSeq < playerEmitters.get(current).arrivalSeq)
+			if (current == null)
 			{
 				tileOwners.put(key, player);
+			}
+			else
+			{
+				contestedTiles.add(key);
+				if (ownerBeats(pe, playerEmitters.get(current), stackRule))
+				{
+					tileOwners.put(key, player);
+				}
 			}
 		}
 		tileOwners.put(tileKey(localPlayer), localPlayer);
@@ -460,7 +478,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				continue;
 			}
-			if (tileOwners.get(tileKey(player)) != player)
+			long key = tileKey(player);
+			boolean suppressed = tileOwners.get(key) != player
+				|| (stackRule == ParticlesConfig.StackOwnerRule.SUPPRESS
+				&& contestedTiles.contains(key) && player != localPlayer);
+			if (suppressed)
 			{
 				// Hidden under a stack: stop emitting and break trail
 				// continuity so un-stacking doesn't lerp from stale positions
@@ -975,6 +997,27 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			adjacency.get(a).add(b);
 			adjacency.get(b).add(a);
+		}
+	}
+
+	/**
+	 * Stacked-tile election: does candidate a beat current owner b?
+	 */
+	private static boolean ownerBeats(PlayerEmitters a, PlayerEmitters b,
+		ParticlesConfig.StackOwnerRule rule)
+	{
+		switch (rule)
+		{
+			case EARLIEST_ARRIVAL:
+				return a.arrivalSeq < b.arrivalSeq;
+			case LATEST_ARRIVAL:
+				return a.arrivalSeq > b.arrivalSeq;
+			case LOWEST_INDEX:
+				return a.playerId < b.playerId;
+			case HIGHEST_INDEX:
+				return a.playerId > b.playerId;
+			default:
+				return false;
 		}
 	}
 
