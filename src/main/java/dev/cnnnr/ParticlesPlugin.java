@@ -700,24 +700,81 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 		}
 
+		// The shippable rule, scored live against the oracle: the engine's
+		// claim precedence (local -> local's player target -> size-1 centered
+		// NPC -> ascending index), with indices from Player.getId() - the
+		// scene-wide source the rule would use outside the hovered tile
+		Player localPlayer = client.getLocalPlayer();
+		Player pred = null;
+		String predWhy;
+		if (stack.contains(localPlayer))
+		{
+			pred = localPlayer;
+			predWhy = "local";
+		}
+		else
+		{
+			Player target = localPlayer != null && localPlayer.getInteracting() instanceof Player
+				? (Player) localPlayer.getInteracting() : null;
+			if (target != null && stack.contains(target))
+			{
+				pred = target;
+				predWhy = "target";
+			}
+			else if (npcClaimedTiles.contains(key))
+			{
+				predWhy = "npc-claim";
+			}
+			else
+			{
+				for (Player p : stack)
+				{
+					if (pred == null || p.getId() < pred.getId())
+					{
+						pred = p;
+					}
+				}
+				predWhy = "idx";
+			}
+		}
+		String predText = (pred == null ? predWhy : pred.getName() + "[" + predWhy + "]")
+			+ (!isCentered(winner) ? " n/a-moving" : pred == winner ? " MATCH" : " MISS");
+
+		// Does the scene-wide index source agree with the menu identifiers?
+		// A disagreement here would explain the old engine-mirror failures.
+		boolean idxOk = true;
+		for (Player p : stack)
+		{
+			Integer menuIdx = menuIndices.get(p);
+			if (menuIdx != null && menuIdx != p.getId())
+			{
+				idxOk = false;
+			}
+		}
+
 		oracleLine = "stack " + stack.size()
 			+ " | drawn " + winner.getName() + (isCentered(winner) ? "" : " (moving)")
 			+ " | gate " + gate
+			+ " | pred " + predText
 			+ " | loIdx " + (lo == null ? "-" : lo.getName())
-			+ " | hiIdx " + (hi == null ? "-" : hi.getName());
+			+ " | hiIdx " + (hi == null ? "-" : hi.getName())
+			+ " | idxSrc " + (idxOk ? "ok" : "MISMATCH");
 
 		// One dump per distinct situation, with everything a candidate
 		// precedence rule could depend on
 		StringBuilder dump = new StringBuilder("stack oracle: drawn=")
 			.append(winner.getName()).append('#').append(menuIndices.getOrDefault(winner, -1))
-			.append(" gate=").append(gate);
+			.append(" gate=").append(gate)
+			.append(" pred=").append(predText)
+			.append(" idxOk=").append(idxOk);
 		for (Player p : stack)
 		{
 			LocalPoint lp = p.getLocalLocation();
 			dump.append(" | ").append(p.getName())
 				.append('#').append(menuIndices.getOrDefault(p, -1))
+				.append('/').append(p.getId())
 				.append(" lp=").append(lp.getX()).append(',').append(lp.getY())
-				.append(p == client.getLocalPlayer() ? " LOCAL" : "")
+				.append(p == localPlayer ? " LOCAL" : "")
 				.append(p.getInteracting() != null ? " ->" + p.getInteracting().getName() : "");
 		}
 		String text = dump.toString();
