@@ -22,6 +22,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.ui.components.IconTextField;
 import net.runelite.client.ui.components.materialtabs.MaterialTab;
@@ -132,6 +133,10 @@ class ParticlesPanel extends PluginPanel
 		}
 
 		searchBar.setIcon(IconTextField.Icon.SEARCH);
+		// IconTextField paints no background until its focus/hover listeners
+		// first fire; give it one up front like the core plugin panels do
+		searchBar.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		searchBar.setHoverBackgroundColor(ColorScheme.DARK_GRAY_HOVER_COLOR);
 		searchBar.getDocument().addDocumentListener(new DocumentListener()
 		{
 			@Override
