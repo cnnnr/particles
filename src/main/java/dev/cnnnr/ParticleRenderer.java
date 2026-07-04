@@ -216,6 +216,14 @@ class ParticleRenderer
 			slotsPerCanvas = Math.max(1, Math.min(
 				MAX_FACES_PER_BATCH / Math.max(1, templateFaceCount),
 				MAX_VERTICES_PER_BATCH / Math.max(1, templateVertexCount)));
+			if (slotsPerCanvas < 8)
+			{
+				// Canvas bounds need the eight corner slots; a mesh this heavy
+				// can't batch safely, so take the per-tick merge path instead
+				log.warn("Particle mesh too heavy for canvas batching ({}v {}f); using per-tick merging",
+					templateVertexCount, templateFaceCount);
+				canvasModeFailed = true;
+			}
 			buildCanvasProto();
 		}
 
@@ -304,31 +312,15 @@ class ParticleRenderer
 	}
 
 	/**
-	 * Load the smallest available candidate mesh. Every vertex is written per
-	 * particle per tick, so lean geometry matters far more than shape -
-	 * spherify remolds anything round enough.
+	 * The disc topology every particle is molded from. Spherify normalizes
+	 * the shape and size, so the pick trades vertex count (written per
+	 * particle per tick) against how round the sphere projection comes out;
+	 * the orb reads best. Slot capacity adapts to whatever this returns.
 	 */
 	private ModelData loadSourceMesh()
 	{
-		int[] candidates = {ItemID.DS2_ORB_INERT, ItemID.MCANNONBALL, ItemID.FEATHER, ItemID.EGG, ItemID.BALL_OF_WOOL};
-		ModelData best = null;
-		int bestVerts = Integer.MAX_VALUE;
-		for (int itemId : candidates)
-		{
-			ItemComposition comp = client.getItemDefinition(itemId);
-			ModelData md = client.loadModelData(comp.getInventoryModel());
-			if (md == null)
-			{
-				continue;
-			}
-			log.debug("Particle mesh candidate {}: {}v {}f", comp.getName(), md.getVerticesCount(), md.getFaceCount());
-			if (md.getVerticesCount() < bestVerts)
-			{
-				bestVerts = md.getVerticesCount();
-				best = md;
-			}
-		}
-		return best;
+		ItemComposition comp = client.getItemDefinition(ItemID.DS2_ORB_INERT);
+		return client.loadModelData(comp.getInventoryModel());
 	}
 
 	/**
@@ -504,13 +496,31 @@ class ParticleRenderer
 		ModelData[] parts = new ModelData[slotsPerCanvas];
 		for (int i = 0; i < slotsPerCanvas; i++)
 		{
-			// Distinct whole-unit offsets spread through the bounds volume, so
-			// welding can't fuse slots (epsilons are sub-unit) AND the bounds
-			// computed from the build-time geometry cover everything runtime
-			// writes are clamped to
-			int x = -(int) VOLUME_HORIZONTAL + (i % 9) * 64;
-			int y = (int) VOLUME_DOWN - ((i / 9) % 24) * 60;
-			int z = -(int) VOLUME_HORIZONTAL + ((i / 216) % 9) * 64;
+			// Distinct whole-unit offsets so welding can't fuse slots (the
+			// epsilons are sub-unit). The first eight slots pin the corners of
+			// the clamp volume, so the bounds computed ONCE over this geometry
+			// cover everything runtime writes are clamped to no matter how few
+			// slots the mesh's budget allows - the old interior-only spread
+			// silently needed 216+ slots for full coverage and asserted the
+			// GPU depth sort when a heavier mesh shrank the slot count. The
+			// rest spread through the interior, shifted off the corner lattice
+			// so no offset ever repeats.
+			int x;
+			int y;
+			int z;
+			if (i < 8)
+			{
+				x = (i & 1) == 0 ? -(int) VOLUME_HORIZONTAL : (int) VOLUME_HORIZONTAL;
+				y = (i & 2) == 0 ? (int) VOLUME_UP : (int) VOLUME_DOWN;
+				z = (i & 4) == 0 ? -(int) VOLUME_HORIZONTAL : (int) VOLUME_HORIZONTAL;
+			}
+			else
+			{
+				int k = i + 1;
+				x = -(int) VOLUME_HORIZONTAL + (k % 9) * 64;
+				y = (int) VOLUME_DOWN - ((k / 9) % 24) * 60;
+				z = -(int) VOLUME_HORIZONTAL + ((k / 216) % 9) * 64;
+			}
 			parts[i] = canvasProto.shallowCopy().cloneVertices().translate(x, y, z);
 		}
 		ModelData merged = client.mergeModels(parts).cloneTransparencies(true);
