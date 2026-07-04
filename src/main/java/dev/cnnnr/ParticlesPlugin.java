@@ -634,7 +634,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 		// Menus build bottom-up: the last vanilla player entry renders as the
 		// top row. Only vanilla options - plugin-injected entries would lie.
-		MenuEntry[] entries = client.getMenuEntries();
+		MenuEntry[] entries = client.getMenu().getMenuEntries();
 		Player winner = null;
 		Map<Player, Integer> menuIndices = new HashMap<>();
 		for (MenuEntry entry : entries)
