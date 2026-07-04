@@ -53,15 +53,32 @@ class ModelSnapshot
 		 * cape when a face-revealing helmet is worn.
 		 */
 		private final int[] vertices;
+		/**
+		 * Signatures this piece would produce under the three reversed-winding
+		 * visit orders. A mirrored placement of the same mesh (some wall
+		 * orientations flip the model, reversing triangle winding) hashes as
+		 * one of these, so a profile authored on either handedness matches
+		 * both. Field-confirmed 2026-07: same-ID wall torches produced 9v8f
+		 * pieces with different hashes per orientation.
+		 */
+		private final String[] mirrorSignatures;
+		/**
+		 * First-appearance vertex orders for each mirror variant, so a
+		 * profile matched through a mirror signature maps its piece-local
+		 * indices onto the mirrored counterpart vertices.
+		 */
+		private final int[][] mirrorVertices;
 		// Lookup: sorted globals with their parallel local indices
 		private final int[] sortedVertices;
 		private final int[] sortedToLocal;
 
-		Piece(String signature, int[] faces, int[] vertices)
+		Piece(String signature, int[] faces, int[] vertices, String[] mirrorSignatures, int[][] mirrorVertices)
 		{
 			this.signature = signature;
 			this.faces = faces;
 			this.vertices = vertices;
+			this.mirrorSignatures = mirrorSignatures;
+			this.mirrorVertices = mirrorVertices;
 
 			sortedVertices = vertices.clone();
 			Arrays.sort(sortedVertices);
@@ -79,6 +96,45 @@ class ModelSnapshot
 		{
 			int pos = Arrays.binarySearch(sortedVertices, globalVertex);
 			return pos < 0 ? -1 : sortedToLocal[pos];
+		}
+
+		/**
+		 * Does this signature identify the piece, in either handedness?
+		 */
+		boolean matchesSignature(String sig)
+		{
+			if (signature.equals(sig))
+			{
+				return true;
+			}
+			for (String mirror : mirrorSignatures)
+			{
+				if (mirror.equals(sig))
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
+		/**
+		 * The local-to-global vertex order under whichever labeling produced
+		 * this signature; the direct order when it isn't a mirror match.
+		 */
+		int[] verticesFor(String sig)
+		{
+			if (signature.equals(sig))
+			{
+				return vertices;
+			}
+			for (int m = 0; m < mirrorSignatures.length; m++)
+			{
+				if (mirrorSignatures[m].equals(sig))
+				{
+					return mirrorVertices[m];
+				}
+			}
+			return vertices;
 		}
 	}
 
@@ -170,17 +226,30 @@ class ModelSnapshot
 			stampValue++;
 
 			List<Integer> appearance = new ArrayList<>();
-			long hash = 1125899906842597L;
-			for (int f : faces)
-			{
-				hash = 31 * hash + labelOf(faceIndices1[f], label, stamp, stampValue, appearance);
-				hash = 31 * hash + labelOf(faceIndices2[f], label, stamp, stampValue, appearance);
-				hash = 31 * hash + labelOf(faceIndices3[f], label, stamp, stampValue, appearance);
-			}
-
+			long hash = hashPass(faces, faceIndices1, faceIndices2, faceIndices3,
+				label, stamp, stampValue, appearance);
 			int[] verts = appearance.stream().mapToInt(Integer::intValue).toArray();
 			String signature = verts.length + "v" + faces.length + "f-" + Long.toHexString(hash);
-			result.add(new Piece(signature, faces, verts));
+
+			// The three reversed-winding visit orders: a mirrored placement
+			// of this mesh hashes as one of them (which one depends on the
+			// index pair the engine swaps when flipping)
+			String[] mirrorSignatures = new String[3];
+			int[][] mirrorVertices = new int[3][];
+			for (int m = 0; m < 3; m++)
+			{
+				int[] o1 = m == 0 ? faceIndices1 : m == 1 ? faceIndices3 : faceIndices2;
+				int[] o2 = m == 0 ? faceIndices3 : m == 1 ? faceIndices2 : faceIndices1;
+				int[] o3 = m == 0 ? faceIndices2 : m == 1 ? faceIndices1 : faceIndices3;
+				stampValue++;
+				List<Integer> mirrorAppearance = new ArrayList<>();
+				long mirrorHash = hashPass(faces, o1, o2, o3, label, stamp, stampValue, mirrorAppearance);
+				mirrorVertices[m] = mirrorAppearance.stream().mapToInt(Integer::intValue).toArray();
+				mirrorSignatures[m] = mirrorVertices[m].length + "v" + faces.length + "f-"
+					+ Long.toHexString(mirrorHash);
+			}
+
+			result.add(new Piece(signature, faces, verts, mirrorSignatures, mirrorVertices));
 		}
 		result.sort(Comparator.comparingInt((Piece p) -> p.faces.length).reversed());
 
@@ -198,6 +267,19 @@ class ModelSnapshot
 			}
 		}
 		return result;
+	}
+
+	private static long hashPass(int[] faces, int[] order1, int[] order2, int[] order3,
+		int[] label, int[] stamp, int stampValue, List<Integer> appearance)
+	{
+		long hash = 1125899906842597L;
+		for (int f : faces)
+		{
+			hash = 31 * hash + labelOf(order1[f], label, stamp, stampValue, appearance);
+			hash = 31 * hash + labelOf(order2[f], label, stamp, stampValue, appearance);
+			hash = 31 * hash + labelOf(order3[f], label, stamp, stampValue, appearance);
+		}
+		return hash;
 	}
 
 	private static int labelOf(int vertex, int[] label, int[] stamp, int stampValue, List<Integer> appearance)

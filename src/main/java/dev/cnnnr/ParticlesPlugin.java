@@ -1407,11 +1407,15 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		for (ModelSnapshot.Piece piece : snapshot.getPieces())
 		{
 			present.add(piece.getSignature());
+			for (String mirror : piece.getMirrorSignatures())
+			{
+				present.add(mirror);
+			}
 			for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
 			{
 				EmitterProfile profile = entry.getValue();
 				if (!EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType())
-					|| !piece.getSignature().equals(profile.getSignature())
+					|| !piece.matchesSignature(profile.getSignature())
 					|| !profile.isEnabled()
 					|| profile.getVertices().isEmpty()
 					|| (!developerMode && ParticlesPanel.Category.isWip(profile)))
@@ -1430,11 +1434,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				}
 
 				List<Integer> globals = new ArrayList<>();
+				int[] pieceVerts = piece.verticesFor(profile.getSignature());
 				for (int local : profile.getVertices())
 				{
-					if (local >= 0 && local < piece.getVertices().length)
+					if (local >= 0 && local < pieceVerts.length)
 					{
-						globals.add(piece.getVertices()[local]);
+						globals.add(pieceVerts[local]);
 					}
 				}
 				if (globals.isEmpty())
@@ -2197,16 +2202,17 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			// emit, matching the player path's behavior
 			for (ModelSnapshot.Piece piece : snapshot.getPieces())
 			{
-				if (!piece.getSignature().equals(profile.getSignature()))
+				if (!piece.matchesSignature(profile.getSignature()))
 				{
 					continue;
 				}
 				List<Integer> globals = new ArrayList<>();
+				int[] pieceVerts = piece.verticesFor(profile.getSignature());
 				for (int local : profile.getVertices())
 				{
-					if (local >= 0 && local < piece.getVertices().length)
+					if (local >= 0 && local < pieceVerts.length)
 					{
-						globals.add(piece.getVertices()[local]);
+						globals.add(pieceVerts[local]);
 					}
 				}
 				if (!globals.isEmpty())
@@ -2613,15 +2619,16 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		List<Integer> globals = new ArrayList<>();
 		for (ModelSnapshot.Piece piece : ModelSnapshot.capture(model).getPieces())
 		{
-			if (!piece.getSignature().equals(ge.signature))
+			if (!piece.matchesSignature(ge.signature))
 			{
 				continue;
 			}
+			int[] pieceVerts = piece.verticesFor(ge.signature);
 			for (int local : ge.locals)
 			{
-				if (local >= 0 && local < piece.getVertices().length)
+				if (local >= 0 && local < pieceVerts.length)
 				{
-					globals.add(piece.getVertices()[local]);
+					globals.add(pieceVerts[local]);
 				}
 			}
 		}
@@ -2730,16 +2737,17 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 			for (ModelSnapshot.Piece piece : snapshot.getPieces())
 			{
-				if (!piece.getSignature().equals(profile.getSignature()))
+				if (!piece.matchesSignature(profile.getSignature()))
 				{
 					continue;
 				}
 				List<Integer> globals = new ArrayList<>();
+				int[] pieceVerts = piece.verticesFor(profile.getSignature());
 				for (int local : profile.getVertices())
 				{
-					if (local >= 0 && local < piece.getVertices().length)
+					if (local >= 0 && local < pieceVerts.length)
 					{
-						globals.add(piece.getVertices()[local]);
+						globals.add(pieceVerts[local]);
 					}
 				}
 				if (!globals.isEmpty())
