@@ -36,18 +36,25 @@ import net.runelite.client.util.LinkBrowser;
  */
 class ParticlesPanel extends PluginPanel
 {
-	private enum Category
+	enum Category
 	{
-		ALL("All"),
-		PLAYER("Player"),
-		PROJECTILE("Proj"),
-		ANIMATED("Anim");
+		ALL("All", false),
+		PLAYER("Player", false),
+		PROJECTILE("Proj", true),
+		ANIMATED("Anim", true);
 
 		private final String label;
+		/**
+		 * Work-in-progress category: outside developer mode its tab is hidden,
+		 * its profiles vanish from the sidebar, and they are force-disabled at
+		 * emission time. Flip to false when the category is ready to ship.
+		 */
+		private final boolean wip;
 
-		Category(String label)
+		Category(String label, boolean wip)
 		{
 			this.label = label;
+			this.wip = wip;
 		}
 
 		boolean matches(EmitterProfile profile)
@@ -63,6 +70,22 @@ class ParticlesPanel extends PluginPanel
 				default:
 					return true;
 			}
+		}
+
+		/**
+		 * True when the profile falls into any WIP category and should be
+		 * hidden and force-disabled outside developer mode.
+		 */
+		static boolean isWip(EmitterProfile profile)
+		{
+			for (Category value : values())
+			{
+				if (value.wip && value.matches(profile))
+				{
+					return true;
+				}
+			}
+			return false;
 		}
 	}
 
@@ -93,7 +116,7 @@ class ParticlesPanel extends PluginPanel
 
 		JButton support = new JButton("Support",
 			new ImageIcon(ImageUtil.loadImageResource(ParticlesPlugin.class, "/support.png")));
-		support.setToolTipText("Buy me a coffee");
+		support.setToolTipText("Thank you! <3");
 		support.addActionListener(e -> LinkBrowser.browse("https://buymeacoffee.com/cnnnr"));
 
 		JPanel controls = new JPanel(new GridLayout(0, 1, 0, 6));
@@ -134,6 +157,10 @@ class ParticlesPanel extends PluginPanel
 		tabGroup.setLayout(new GridLayout(1, 0, 4, 0));
 		for (Category value : Category.values())
 		{
+			if (value.wip && !developerMode)
+			{
+				continue;
+			}
 			MaterialTab tab = new MaterialTab(value.label, tabGroup, new JPanel());
 			tab.setOnSelectEvent(() ->
 			{
@@ -177,6 +204,7 @@ class ParticlesPanel extends PluginPanel
 		String query = searchBar.getText() == null ? "" : searchBar.getText().trim().toLowerCase();
 		List<Map.Entry<String, EmitterProfile>> entries = new ArrayList<>(profiles.entrySet());
 		entries.removeIf(entry -> !category.matches(entry.getValue())
+			|| (!developerMode && Category.isWip(entry.getValue()))
 			|| !matchesSearch(entry.getValue(), query));
 		entries.sort(Comparator.comparing(entry ->
 			entry.getValue().getName() == null ? "" : entry.getValue().getName().toLowerCase()));

@@ -788,7 +788,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				if (!EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType())
 					|| !piece.getSignature().equals(profile.getSignature())
 					|| !profile.isEnabled()
-					|| profile.getVertices().isEmpty())
+					|| profile.getVertices().isEmpty()
+					|| (!developerMode && ParticlesPanel.Category.isWip(profile)))
 				{
 					continue;
 				}
@@ -838,7 +839,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
 		{
 			EmitterProfile profile = entry.getValue();
-			if (!profile.isProjectileTarget() || !profile.isEnabled() || profile.getProjectileId() < 0)
+			if (!profile.isProjectileTarget() || !profile.isEnabled() || profile.getProjectileId() < 0
+				|| (!developerMode && ParticlesPanel.Category.isWip(profile)))
 			{
 				continue;
 			}
