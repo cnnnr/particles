@@ -103,6 +103,12 @@ class EmitterProfile
 	 */
 	private int depthBias = 0;
 	/**
+	 * Halve particle lifetime while the wearer's run pose animation is
+	 * playing, keeping fast-moving plumes tight instead of smearing a tile
+	 * behind the player.
+	 */
+	private boolean dynamicLifetime = false;
+	/**
 	 * Legacy on/off flag, migrated into {@link #featherStrength} on load.
 	 */
 	private boolean feather = false;
@@ -156,6 +162,7 @@ class EmitterProfile
 		spawnJitter = other.spawnJitter;
 		featherStrength = other.featherStrength;
 		depthBias = other.depthBias;
+		dynamicLifetime = other.dynamicLifetime;
 		offsetX = other.offsetX;
 		offsetY = other.offsetY;
 		offsetZ = other.offsetZ;

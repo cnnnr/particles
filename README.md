@@ -16,7 +16,7 @@ The plugin includes a preset pack covering popular items, including:
 - All halos
 - Crystal crowns
 - Ancient sceptres
-- Scythe of vitur, Tumeken's shadow, nightmare staves, dragonfire shield
+- Scythe of vitur ornament kits, Tumeken's shadow, nightmare staves, dragonfire shield
 
 Each preset can be toggled individually.
 
@@ -24,4 +24,4 @@ Each preset can be toggled individually.
 
 - **Max live particles** — the total particle budget across all effects. Lower it if you want to trade density for frames.
 
-<!-- screenshots -->
+![Particle effects preview](https://i.imgur.com/BwqYvnv.gif)

@@ -146,6 +146,14 @@ class ParticleRenderer
 	private boolean canvasModeFailed;
 	private ModelData canvasProto;
 	private int slotsPerCanvas;
+	/**
+	 * Per-tick scratch for O(1) canvas claims: tile -> the canvas currently
+	 * filling for that tile, plus a cursor into the pool. Claims only ever
+	 * advance the cursor, so canvases claimed this tick are exactly the pool
+	 * prefix [0, idleCursor).
+	 */
+	private final Map<Long, BatchCanvas> tileCanvases = new HashMap<>();
+	private int idleCursor;
 
 	/**
 	 * Legacy per-tick merge path, kept as fallback if canvas slicing fails.
@@ -383,6 +391,11 @@ class ParticleRenderer
 		{
 			canvas.claimed = false;
 		}
+		tileCanvases.clear();
+		idleCursor = 0;
+		// Consecutive particles usually share a tile; the memo skips the map
+		long lastKey = Long.MIN_VALUE;
+		BatchCanvas lastCanvas = null;
 
 		for (Particle p : particles)
 		{
@@ -398,11 +411,21 @@ class ParticleRenderer
 			}
 			long tileKey = ((long) sceneX << 32) | (sceneY & 0xffffffffL);
 
-			BatchCanvas canvas = claimCanvas(tileKey, worldView, level);
-			if (canvas == null)
+			BatchCanvas canvas;
+			if (tileKey == lastKey && lastCanvas.usedSlots < slotsPerCanvas)
 			{
-				// Canvas build failed; legacy path takes over next tick
-				return;
+				canvas = lastCanvas;
+			}
+			else
+			{
+				canvas = claimCanvas(tileKey, worldView, level);
+				if (canvas == null)
+				{
+					// Canvas build failed; legacy path takes over next tick
+					return;
+				}
+				lastKey = tileKey;
+				lastCanvas = canvas;
 			}
 			writeSlot(canvas, canvas.usedSlots++, p, sinYaw, cosYaw, sinPitch, cosPitch);
 			lastBatchedVertices += templateVertexCount;
@@ -437,24 +460,24 @@ class ParticleRenderer
 
 	/**
 	 * Find this tick's canvas for a tile (one with free slots), claiming an
-	 * idle canvas or building a new one as needed. Canvas count grows to the
-	 * peak concurrent demand and is reused thereafter.
+	 * idle canvas or building a new one as needed. O(1): a map resolves the
+	 * tile's current canvas and the cursor hands out idle ones in pool order.
+	 * Canvas count grows to the peak concurrent demand and is reused
+	 * thereafter.
 	 */
 	private BatchCanvas claimCanvas(long tileKey, int worldView, int level)
 	{
-		BatchCanvas idle = null;
-		for (BatchCanvas canvas : canvases)
+		BatchCanvas current = tileCanvases.get(tileKey);
+		if (current != null && current.usedSlots < slotsPerCanvas)
 		{
-			if (canvas.claimed && canvas.tileKey == tileKey && canvas.usedSlots < slotsPerCanvas)
-			{
-				return canvas;
-			}
-			if (idle == null && !canvas.claimed)
-			{
-				idle = canvas;
-			}
+			return current;
 		}
-		if (idle == null)
+		BatchCanvas idle;
+		if (idleCursor < canvases.size())
+		{
+			idle = canvases.get(idleCursor++);
+		}
+		else
 		{
 			idle = buildCanvas();
 			if (idle == null)
@@ -462,11 +485,13 @@ class ParticleRenderer
 				return null;
 			}
 			canvases.add(idle);
+			idleCursor = canvases.size();
 		}
 
 		idle.claimed = true;
 		idle.tileKey = tileKey;
 		idle.usedSlots = 0;
+		tileCanvases.put(tileKey, idle);
 		int centerX = ((int) (tileKey >> 32) << 7) + 64;
 		int centerY = (((int) tileKey) << 7) + 64;
 		idle.centerLp = new LocalPoint(centerX, centerY, worldView);
@@ -504,8 +529,9 @@ class ParticleRenderer
 
 	/**
 	 * Overwrite one slot of a canvas with a particle: billboarded vertices
-	 * always; transparency and colors only when the slot's style, size or
-	 * fade step changed since the slot was last written.
+	 * always; transparencies only when the slot's size or fade step changed;
+	 * colors only when its style changed - colors are fade-independent, the
+	 * life envelope rides entirely in transparency.
 	 */
 	private void writeSlot(BatchCanvas canvas, int slot, Particle p,
 		float sinYaw, float cosYaw, float sinPitch, float cosPitch)
@@ -559,18 +585,25 @@ class ParticleRenderer
 		}
 
 		int variant = size * ParticleStyle.FADE_STEPS + fade;
-		if (canvas.slotStyle[slot] != style || canvas.slotVariant[slot] != variant)
+		int faceBase = slot * templateFaceCount;
+		if (canvas.slotStyle[slot] != style)
 		{
 			canvas.slotStyle[slot] = style;
-			canvas.slotVariant[slot] = variant;
-			int faceBase = slot * templateFaceCount;
-			ModelData fadeTemplate = style.getTemplates()[size][fade];
-			System.arraycopy(fadeTemplate.getFaceTransparencies(), 0, canvas.transparencies, faceBase, templateFaceCount);
-			// Unlit colors for renderers that relight, lit for the others
-			System.arraycopy(fadeTemplate.getFaceColors(), 0, canvas.unlitColors, faceBase, templateFaceCount);
+			canvas.slotVariant[slot] = -1;
+			// Unlit colors for renderers that relight, lit for the others.
+			// Every template of a style shares face colors, so these only
+			// move when the slot changes hands between styles
+			ModelData template = style.getTemplates()[size][fade];
+			System.arraycopy(template.getFaceColors(), 0, canvas.unlitColors, faceBase, templateFaceCount);
 			System.arraycopy(style.getLitColors1(), 0, canvas.colors1, faceBase, templateFaceCount);
 			System.arraycopy(style.getLitColors2(), 0, canvas.colors2, faceBase, templateFaceCount);
 			System.arraycopy(style.getLitColors3(), 0, canvas.colors3, faceBase, templateFaceCount);
+		}
+		if (canvas.slotVariant[slot] != variant)
+		{
+			canvas.slotVariant[slot] = variant;
+			System.arraycopy(style.getTemplates()[size][fade].getFaceTransparencies(), 0,
+				canvas.transparencies, faceBase, templateFaceCount);
 		}
 	}
 
@@ -719,6 +752,7 @@ class ParticleRenderer
 	 */
 	void reset()
 	{
+		tileCanvases.clear();
 		for (BatchCanvas canvas : canvases)
 		{
 			canvas.claimed = false;

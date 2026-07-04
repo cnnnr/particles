@@ -126,6 +126,7 @@ class ModelViewerFrame extends JFrame
 	private final JSpinner rateSpinner = new JSpinner(new SpinnerNumberModel(80, 0, 1000, 5));
 	private final JSpinner trailSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 200, 5));
 	private final JSpinner lifetimeSpinner = new JSpinner(new SpinnerNumberModel(2400, 100, 10000, 100));
+	private final JCheckBox dynamicLifetimeCheck = new JCheckBox();
 	private final JSpinner riseSpinner = new JSpinner(new SpinnerNumberModel(26, 0, 256, 2));
 	private final JSpinner spreadSpinner = new JSpinner(new SpinnerNumberModel(12, 0, 256, 2));
 	private final JSpinner jitterSpinner = new JSpinner(new SpinnerNumberModel(10, 0, 64, 1));
@@ -304,6 +305,8 @@ class ModelViewerFrame extends JFrame
 		grid.add(trailSpinner);
 		grid.add(new JLabel("Lifetime ms"));
 		grid.add(lifetimeSpinner);
+		grid.add(new JLabel("Dynamic life"));
+		grid.add(dynamicLifetimeCheck);
 		grid.add(new JLabel("Rise"));
 		grid.add(riseSpinner);
 		grid.add(new JLabel("Spread"));
@@ -348,6 +351,8 @@ class ModelViewerFrame extends JFrame
 		trailSpinner.addChangeListener(e -> saveStyle());
 		trailSpinner.setToolTipText("Particles per tile of emitter movement, spread evenly along the path - for weapon and projectile trails. Combine with Rate 0 for a pure ribbon.");
 		lifetimeSpinner.addChangeListener(e -> saveStyle());
+		dynamicLifetimeCheck.addActionListener(e -> saveStyle());
+		dynamicLifetimeCheck.setToolTipText("Halve lifetime while the wearer's run animation plays, so plumes stay tight at run speed instead of smearing a tile behind.");
 		riseSpinner.addChangeListener(e -> saveStyle());
 		spreadSpinner.addChangeListener(e -> saveStyle());
 		jitterSpinner.addChangeListener(e -> saveStyle());
@@ -496,6 +501,7 @@ class ModelViewerFrame extends JFrame
 		rateSpinner.setValue(profile.getParticlesPerSecond());
 		trailSpinner.setValue(profile.getTrailDensity());
 		lifetimeSpinner.setValue(profile.getLifetimeMs());
+		dynamicLifetimeCheck.setSelected(profile.isDynamicLifetime());
 		riseSpinner.setValue(profile.getRiseSpeed());
 		spreadSpinner.setValue(profile.getSpreadSpeed());
 		jitterSpinner.setValue(profile.getSpawnJitter());
@@ -544,6 +550,7 @@ class ModelViewerFrame extends JFrame
 		rateSpinner.setEnabled(enabled);
 		trailSpinner.setEnabled(enabled);
 		lifetimeSpinner.setEnabled(enabled);
+		dynamicLifetimeCheck.setEnabled(enabled);
 		riseSpinner.setEnabled(enabled);
 		spreadSpinner.setEnabled(enabled);
 		jitterSpinner.setEnabled(enabled);
@@ -581,6 +588,7 @@ class ModelViewerFrame extends JFrame
 		profile.setParticlesPerSecond((int) rateSpinner.getValue());
 		profile.setTrailDensity((int) trailSpinner.getValue());
 		profile.setLifetimeMs((int) lifetimeSpinner.getValue());
+		profile.setDynamicLifetime(dynamicLifetimeCheck.isSelected());
 		profile.setRiseSpeed((int) riseSpinner.getValue());
 		profile.setSpreadSpeed((int) spreadSpinner.getValue());
 		profile.setSpawnJitter((int) jitterSpinner.getValue());

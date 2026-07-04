@@ -38,6 +38,7 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
@@ -334,7 +335,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			.priority(6)
 			.panel(panel)
 			.build();
-		clientToolbar.addNavigation(navButton);
+		if (!config.hideSidePanel())
+		{
+			clientToolbar.addNavigation(navButton);
+		}
 		refreshPanel();
 
 		log.debug("Particles started");
@@ -358,14 +362,43 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			viewerSnapshot = null;
 		});
 
+		// Capture the instance: a quick disable-enable reassigns the field
+		// before this lambda runs, which would reset the NEW renderer and
+		// orphan the old one's still-active scene objects
+		final ParticleRenderer stopped = renderer;
 		clientThread.invokeLater(() ->
 		{
 			particleSystem.clear(DISCARD);
-			renderer.reset();
+			stopped.reset();
 			anchorCount = 0;
+			playerEmitters.clear();
+			projectileTrackers.clear();
+			activeProjectileProfiles.clear();
+			recentProjectiles.clear();
+			featherDebugPaths.clear();
 		});
 
 		log.debug("Particles stopped");
+	}
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (!ParticlesConfig.GROUP.equals(event.getGroup()) || navButton == null)
+		{
+			return;
+		}
+		if ("hideSidePanel".equals(event.getKey()))
+		{
+			if (config.hideSidePanel())
+			{
+				clientToolbar.removeNavigation(navButton);
+			}
+			else
+			{
+				clientToolbar.addNavigation(navButton);
+			}
+		}
 	}
 
 	@Subscribe
@@ -402,10 +435,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		dt = Math.min(dt, 0.1f);
 
 		// Rebuild styles when profiles change; batches pick the new templates
-		// up immediately since they're re-merged every tick
-		if (stylesRevision != store.getRevision() && renderer.rebuildStyles(store.snapshotAll()))
+		// up immediately since they're re-merged every tick. Read the revision
+		// BEFORE the snapshot: an edit landing in between then leaves
+		// stylesRevision behind, forcing a clean rebuild next tick instead of
+		// recording content it never saw
+		int storeRevision = store.getRevision();
+		if (stylesRevision != storeRevision && renderer.rebuildStyles(store.snapshotAll()))
 		{
-			stylesRevision = store.getRevision();
+			stylesRevision = storeRevision;
 			// Emitters hold style references; re-resolve everyone
 			invalidateResolutions();
 		}
@@ -427,13 +464,22 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (level != lastLevel)
 		{
 			particleSystem.clear(DISCARD);
+			// Break trail continuity too: the inter-floor height (~240) is
+			// under MAX_TRAIL_SEGMENT, so stale prev anchors would smear a
+			// vertical streak between floors on the first tick up a staircase
+			for (PlayerEmitters pe : playerEmitters.values())
+			{
+				pe.prevCount = 0;
+				Arrays.fill(pe.trailCarry, 0f);
+			}
 			lastLevel = level;
 		}
 		anchorWorldView = localPlayer.getLocalLocation().getWorldView();
 		anchorLevel = level;
 
 		// Debug aggregates rebuilt during the player loop
-		boolean markers = config.showAnchor();
+		// Marker circles are a dev authoring aid; users only get the text line
+		boolean markers = config.showAnchor() && developerMode;
 		anchorCount = 0;
 		featherDebugPaths.clear();
 
@@ -1096,6 +1142,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			lastActionAnimation = actionAnimation != -1 ? actionAnimation : lastActionAnimation;
 		}
+		// Dynamic lifetime: at run speed a full-lifetime plume smears a tile
+		// behind the wearer, so flagged profiles halve it while THIS player's
+		// movement animation is playing (weapon-specific run poses included)
+		boolean moving = poseAnimation == player.getRunAnimation() || poseAnimation == player.getWalkAnimation();
 
 		int budget = config.maxParticles();
 		for (ActiveEmitter emitter : pe.emitters)
@@ -1121,6 +1171,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			int count = (int) emitter.carry;
 			emitter.carry -= count;
 
+			float lifeScale = style.isDynamicLifetime() && moving ? 0.5f : 1f;
 			boolean feathered = style.getFeatherStrength() > 0 && emitter.chains != null
 				&& emitter.anchorCount == emitter.vertices.length;
 			for (int i = 0; i < count; i++)
@@ -1131,12 +1182,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				}
 				if (feathered)
 				{
-					spawnFeathered(pe, emitter);
+					spawnFeathered(pe, emitter, lifeScale);
 				}
 				else
 				{
 					int a = emitter.anchorStart + random.nextInt(emitter.anchorCount);
-					spawnParticle(pe, emitter, a, random.nextFloat());
+					spawnParticle(pe, emitter, a, random.nextFloat(), lifeScale);
 				}
 			}
 
@@ -1164,7 +1215,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 						return;
 					}
 					// Stratified positions along the segment: an even ribbon
-					spawnParticle(pe, emitter, a, (i + random.nextFloat()) / n);
+					spawnParticle(pe, emitter, a, (i + random.nextFloat()) / n, lifeScale);
 				}
 			}
 		}
@@ -1174,7 +1225,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * Spawn one particle at fraction t along the anchor's movement segment
 	 * since last tick (falling back to its current position), plus jitter.
 	 */
-	private void spawnParticle(PlayerEmitters pe, ActiveEmitter emitter, int a, float t)
+	private void spawnParticle(PlayerEmitters pe, ActiveEmitter emitter, int a, float t, float lifeScale)
 	{
 		float ax = pe.anchorXs[a];
 		float ay = pe.anchorYs[a];
@@ -1186,7 +1237,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			az = pe.prevZs[a] + (az - pe.prevZs[a]) * t;
 		}
 
-		spawnAt(emitter.style, ax, ay, az);
+		spawnAt(emitter.style, ax, ay, az, lifeScale);
 	}
 
 	/**
@@ -1194,7 +1245,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * a quadratic curve through segment midpoints with the vertex as control
 	 * point, which rounds off jagged hem corners into a soft band.
 	 */
-	private void spawnFeathered(PlayerEmitters pe, ActiveEmitter emitter)
+	private void spawnFeathered(PlayerEmitters pe, ActiveEmitter emitter, float lifeScale)
 	{
 		int k = random.nextInt(emitter.sampleChainOf.length);
 		int[] chain = emitter.chains[emitter.sampleChainOf[k]];
@@ -1232,7 +1283,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			z = pz + (z - pz) * timeT;
 		}
 
-		spawnAt(emitter.style, x, y, z);
+		spawnAt(emitter.style, x, y, z, lifeScale);
 	}
 
 	/**
@@ -1327,7 +1378,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 						return;
 					}
 					float t = segment ? random.nextFloat() : 1f;
-					spawnAt(style, px + (x - px) * t, py + (y - py) * t, pz + (z - pz) * t);
+					spawnAt(style, px + (x - px) * t, py + (y - py) * t, pz + (z - pz) * t, 1f);
 				}
 
 				// Distance-based ribbon emission
@@ -1343,7 +1394,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 							return;
 						}
 						float t = (i + random.nextFloat()) / n;
-						spawnAt(style, px + (x - px) * t, py + (y - py) * t, pz + (z - pz) * t);
+						spawnAt(style, px + (x - px) * t, py + (y - py) * t, pz + (z - pz) * t, 1f);
 					}
 				}
 			}
@@ -1386,7 +1437,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		recentProjectiles.put(projectileId, new long[]{1, nowMs});
 	}
 
-	private void spawnAt(ParticleStyle style, float ax, float ay, float az)
+	private void spawnAt(ParticleStyle style, float ax, float ay, float az, float lifeScale)
 	{
 		// Spawn within a small volume around the point, not at it exactly
 		float jitter = style.getSpawnJitter();
@@ -1407,7 +1458,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		int sizeVariant = random.nextInt(ParticleStyle.SIZE_MULTIPLIERS.length);
 
 		Particle p = particleSystem.spawn(x, y, z, velX, velY, velZ,
-			style.getLifetimeSec(), style, sizeVariant, wobblePhase, wobbleFreq, spread);
+			style.getLifetimeSec() * lifeScale, style, sizeVariant, wobblePhase, wobbleFreq, spread);
 		if (p != null)
 		{
 			windowSpawns++;

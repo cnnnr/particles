@@ -46,6 +46,10 @@ class ParticleStyle
 	 */
 	private final float depthBias;
 	/**
+	 * Halve lifetime while the wearer runs; see EmitterProfile.
+	 */
+	private final boolean dynamicLifetime;
+	/**
 	 * Fixed emit offset from the vertex in model space, applied before the
 	 * player's facing rotation so it turns with them. X sideways, Y
 	 * forward/back, Z up (positive).
@@ -75,6 +79,7 @@ class ParticleStyle
 		this.spawnJitter = profile.getSpawnJitter();
 		this.featherStrength = profile.getFeatherStrength();
 		this.depthBias = profile.getDepthBias();
+		this.dynamicLifetime = profile.isDynamicLifetime();
 		this.offsetX = profile.getOffsetX();
 		this.offsetY = profile.getOffsetY();
 		this.offsetZ = profile.getOffsetZ();
