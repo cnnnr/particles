@@ -48,7 +48,7 @@ import net.runelite.client.ui.overlay.OverlayManager;
 @Slf4j
 @PluginDescriptor(
 	name = "Particles",
-	description = "Emit particles from model vertices",
+	description = "Cosmetic particle effects for capes, halos, etc.",
 	tags = {"particles", "cosmetic", "effects"}
 )
 public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callbacks
