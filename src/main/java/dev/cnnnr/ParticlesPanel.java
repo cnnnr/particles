@@ -7,14 +7,18 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.awt.GridLayout;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import net.runelite.client.ui.PluginPanel;
+import net.runelite.client.util.ImageUtil;
+import net.runelite.client.util.LinkBrowser;
 
 /**
  * Sidebar panel: opens the vertex picker and lists saved emitter pieces
@@ -40,6 +44,11 @@ class ParticlesPanel extends PluginPanel
 		setLayout(new BorderLayout(0, 10));
 		setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
+		JButton support = new JButton("Support",
+			new ImageIcon(ImageUtil.loadImageResource(ParticlesPlugin.class, "/support.png")));
+		support.setToolTipText("Buy me a coffee");
+		support.addActionListener(e -> LinkBrowser.browse("https://buymeacoffee.com/cnnnr"));
+
 		JButton open = new JButton("Open vertex picker");
 		open.addActionListener(e -> openViewer.run());
 
@@ -49,8 +58,12 @@ class ParticlesPanel extends PluginPanel
 
 		profileList.setLayout(new BoxLayout(profileList, BoxLayout.Y_AXIS));
 
+		JPanel buttons = new JPanel(new GridLayout(0, 1, 0, 6));
+		buttons.add(support);
+		buttons.add(open);
+
 		JPanel top = new JPanel(new BorderLayout(0, 10));
-		top.add(open, BorderLayout.NORTH);
+		top.add(buttons, BorderLayout.NORTH);
 		top.add(hint, BorderLayout.CENTER);
 		add(top, BorderLayout.NORTH);
 		add(profileList, BorderLayout.CENTER);
