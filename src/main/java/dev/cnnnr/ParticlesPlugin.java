@@ -170,7 +170,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * only way to see the player view locally. Safe to ship true by accident
 	 * - players already run without developer mode.
 	 */
-	private static final boolean PREVIEW_PLAYER_VIEW = true;
+	private static final boolean PREVIEW_PLAYER_VIEW = false;
 
 	/**
 	 * Authoring tools (vertex picker, profile edit controls) only exist in
@@ -305,8 +305,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		@Nullable
 		final String signature;
 		final int[] locals;
-		@Nullable
-		int[] globals;
+		/**
+		 * One resolved emitter per matching piece: vertices are model
+		 * globals, chains present when feathering.
+		 */
+		final List<ActiveEmitter> resolved = new ArrayList<>();
 		boolean resolveTried;
 
 		GraphicEmitter(ParticleStyle style, @Nullable String signature, int[] locals)
@@ -2711,21 +2714,22 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * per rebuild. Attaches across every matching piece like the other
 	 * vertex targets.
 	 */
-	private static void resolveGraphic(GraphicEmitter ge, Model model)
+	private void resolveGraphic(GraphicEmitter ge, Model model)
 	{
 		ge.resolveTried = true;
 		if (ge.signature == null || ge.locals.length == 0)
 		{
 			return;
 		}
-		List<Integer> globals = new ArrayList<>();
-		for (ModelSnapshot.Piece piece : ModelSnapshot.capture(model).getPieces())
+		ModelSnapshot snapshot = ModelSnapshot.capture(model);
+		for (ModelSnapshot.Piece piece : snapshot.getPieces())
 		{
 			if (!piece.matchesSignature(ge.signature))
 			{
 				continue;
 			}
 			int[] pieceVerts = piece.verticesFor(ge.signature);
+			List<Integer> globals = new ArrayList<>();
 			for (int local : ge.locals)
 			{
 				if (local >= 0 && local < pieceVerts.length)
@@ -2733,39 +2737,173 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 					globals.add(pieceVerts[local]);
 				}
 			}
-		}
-		if (!globals.isEmpty())
-		{
-			ge.globals = new int[globals.size()];
-			for (int i = 0; i < ge.globals.length; i++)
+			if (globals.isEmpty())
 			{
-				ge.globals[i] = globals.get(i);
+				continue;
 			}
+			int[] vertices = new int[globals.size()];
+			for (int i = 0; i < vertices.length; i++)
+			{
+				vertices[i] = globals.get(i);
+			}
+			int[][] chains = ge.style.getFeatherStrength() > 0
+				? buildChains(snapshot, piece, vertices)
+				: null;
+			ge.resolved.add(new ActiveEmitter(ge.style, vertices, chains));
 		}
 	}
 
+	private static final int VISIBLE_ALPHA_MAX = 128;
+	private boolean[] visibleMaskScratch = new boolean[0];
+	private float[] gfxAnchorXs = new float[0];
+	private float[] gfxAnchorYs = new float[0];
+	private float[] gfxAnchorZs = new float[0];
+
 	/**
-	 * One spawn for a graphic emitter: on a random attached vertex when the
-	 * profile picked some (falling back to the base point if the piece never
-	 * resolved), else at the base point.
+	 * Spawn a batch for a graphic emitter at its base point. Vertex-based
+	 * emitters spawn only from CURRENTLY VISIBLE vertices: swipe-style gfx
+	 * keep their whole mesh in place and animate the sweep purely with face
+	 * transparency, so hidden vertices must not emit ahead of the visible
+	 * arc. Feathered emitters trace the smoothed chain instead (a chain
+	 * across a half-revealed mesh has no clean meaning). While the whole
+	 * mesh is hidden the carry resets so the reveal doesn't burst.
+	 *
+	 * @return false when the particle budget is exhausted
 	 */
-	private void spawnGraphic(GraphicEmitter ge, @Nullable Model model, float baseX, float baseY, float baseZ)
+	private boolean spawnGraphicBatch(GraphicEmitter ge, @Nullable Model model, int count,
+		float baseX, float baseY, float baseZ, int budget, double[] carries, int gi)
 	{
 		ParticleStyle style = ge.style;
-		float x = baseX + style.getOffsetX();
-		float y = baseY + style.getOffsetY();
-		float z = baseZ - style.getOffsetZ();
-		if (model != null && ge.globals != null)
+		float ox = baseX + style.getOffsetX();
+		float oy = baseY + style.getOffsetY();
+		float oz = baseZ - style.getOffsetZ();
+		if (model == null || ge.resolved.isEmpty())
 		{
-			int g = ge.globals[random.nextInt(ge.globals.length)];
-			if (g >= 0 && g < model.getVerticesCount())
+			for (int i = 0; i < count; i++)
 			{
-				x += model.getVerticesX()[g];
-				y += model.getVerticesZ()[g];
-				z += model.getVerticesY()[g];
+				if (particleSystem.getParticles().size() >= budget)
+				{
+					return false;
+				}
+				spawnAt(style, ox, oy, oz, 1f);
+			}
+			return true;
+		}
+		boolean feathered = style.getFeatherStrength() > 0;
+		boolean[] visible = feathered ? null : visibleVertexMask(model);
+		for (int i = 0; i < count; i++)
+		{
+			if (particleSystem.getParticles().size() >= budget)
+			{
+				return false;
+			}
+			ActiveEmitter emitter = ge.resolved.size() == 1
+				? ge.resolved.get(0)
+				: ge.resolved.get(random.nextInt(ge.resolved.size()));
+			if (feathered && emitter.chains != null)
+			{
+				fillGraphicAnchors(emitter, model, ox, oy, oz);
+				spawnFeatheredStatic(gfxAnchorXs, gfxAnchorYs, gfxAnchorZs, emitter);
+			}
+			else
+			{
+				int v = pickVisibleVertex(emitter.vertices, visible, model.getVerticesCount());
+				if (v < 0)
+				{
+					carries[gi] = 0;
+					return true;
+				}
+				spawnAt(style, ox + model.getVerticesX()[v], oy + model.getVerticesZ()[v],
+					oz + model.getVerticesY()[v], 1f);
 			}
 		}
-		spawnAt(style, x, y, z, 1f);
+		return true;
+	}
+
+	/**
+	 * Vertices touching at least one face under the transparency threshold,
+	 * or null when the model has no per-face alpha (everything visible).
+	 */
+	@Nullable
+	private boolean[] visibleVertexMask(Model model)
+	{
+		byte[] transparencies = model.getFaceTransparencies();
+		if (transparencies == null)
+		{
+			return null;
+		}
+		int vertexCount = model.getVerticesCount();
+		if (visibleMaskScratch.length < vertexCount)
+		{
+			visibleMaskScratch = new boolean[vertexCount];
+		}
+		boolean[] mask = visibleMaskScratch;
+		Arrays.fill(mask, 0, vertexCount, false);
+		int[] f1 = model.getFaceIndices1();
+		int[] f2 = model.getFaceIndices2();
+		int[] f3 = model.getFaceIndices3();
+		int faceCount = Math.min(model.getFaceCount(), transparencies.length);
+		for (int f = 0; f < faceCount; f++)
+		{
+			if ((transparencies[f] & 0xFF) <= VISIBLE_ALPHA_MAX)
+			{
+				mask[f1[f]] = true;
+				mask[f2[f]] = true;
+				mask[f3[f]] = true;
+			}
+		}
+		return mask;
+	}
+
+	private int pickVisibleVertex(int[] vertices, @Nullable boolean[] visible, int vertexCount)
+	{
+		if (visible == null)
+		{
+			int v = vertices[random.nextInt(vertices.length)];
+			return v >= 0 && v < vertexCount ? v : -1;
+		}
+		// Random start with a linear probe; emitter vertex sets are small
+		int start = random.nextInt(vertices.length);
+		for (int i = 0; i < vertices.length; i++)
+		{
+			int v = vertices[(start + i) % vertices.length];
+			if (v >= 0 && v < vertexCount && v < visible.length && visible[v])
+			{
+				return v;
+			}
+		}
+		return -1;
+	}
+
+	private void fillGraphicAnchors(ActiveEmitter emitter, Model model, float ox, float oy, float oz)
+	{
+		int n = emitter.vertices.length;
+		if (gfxAnchorXs.length < n)
+		{
+			gfxAnchorXs = new float[n];
+			gfxAnchorYs = new float[n];
+			gfxAnchorZs = new float[n];
+		}
+		int vertexCount = model.getVerticesCount();
+		float[] vx = model.getVerticesX();
+		float[] vy = model.getVerticesY();
+		float[] vz = model.getVerticesZ();
+		for (int k = 0; k < n; k++)
+		{
+			int v = emitter.vertices[k];
+			if (v < 0 || v >= vertexCount)
+			{
+				gfxAnchorXs[k] = ox;
+				gfxAnchorYs[k] = oy;
+				gfxAnchorZs[k] = oz;
+				continue;
+			}
+			gfxAnchorXs[k] = ox + vx[v];
+			gfxAnchorYs[k] = oy + vz[v];
+			gfxAnchorZs[k] = oz + vy[v];
+		}
+		emitter.anchorStart = 0;
+		emitter.anchorCount = n;
 	}
 
 	/**
@@ -2933,13 +3071,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 						- actor.getAnimationHeightOffset();
 				}
 				float z = actorBase - spotAnim.getHeight();
-				for (int i = 0; i < count; i++)
+				if (!spawnGraphicBatch(ge, model, count, lp.getX(), lp.getY(), z, budget, carries, gi))
 				{
-					if (particleSystem.getParticles().size() >= budget)
-					{
-						return;
-					}
-					spawnGraphic(ge, model, lp.getX(), lp.getY(), z);
+					return;
 				}
 			}
 		}
@@ -2997,13 +3131,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				carries[gi] += Math.min(ge.style.getParticlesPerSecond() * densityScale, sustainable) * dt;
 				int count = (int) carries[gi];
 				carries[gi] -= count;
-				for (int i = 0; i < count; i++)
+				if (count > 0 && !spawnGraphicBatch(ge, model, count, lp.getX(), lp.getY(),
+					graphic.getZ(), budget, carries, gi))
 				{
-					if (particleSystem.getParticles().size() >= budget)
-					{
-						return;
-					}
-					spawnGraphic(ge, model, lp.getX(), lp.getY(), graphic.getZ());
+					return;
 				}
 			}
 		}

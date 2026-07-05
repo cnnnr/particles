@@ -821,9 +821,8 @@ class ModelViewerFrame extends JFrame
 		boolean graphic = profile.isGraphicTarget();
 		boolean object = profile.isObjectTarget();
 		boolean npc = profile.isNpcTarget();
-		boolean vertexTarget = !projectile && !graphic;
 		boolean actorTarget = EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType()) || npc;
-		featherSpinner.setEnabled(vertexTarget);
+		featherSpinner.setEnabled(!projectile);
 		offsetXSpinner.setEnabled(!projectile);
 		offsetYSpinner.setEnabled(!projectile);
 		offsetZSpinner.setEnabled(!projectile);
