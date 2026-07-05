@@ -947,10 +947,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 		if (pendingGraphicCapture >= 0)
 		{
-			Model pendingModel = findGraphicModel(pendingGraphicCapture);
+			int armedGraphic = pendingGraphicCapture;
+			Model pendingModel = findGraphicModel(armedGraphic);
 			if (pendingModel != null)
 			{
-				pushGraphicSnapshot(pendingModel);
+				pushGraphicSnapshot(armedGraphic, pendingModel);
 			}
 		}
 		if (recordTicksLeft > 0)
@@ -3085,15 +3086,6 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		refreshSnapshot();
 	}
 
-	@Override
-	public void recordAnimation()
-	{
-		int objectId = viewerObjectId;
-		int npcId = viewerNpcId;
-		int graphicId = viewerGraphicId;
-		clientThread.invokeLater(() -> startRecording(objectId, npcId, graphicId));
-	}
-
 	/**
 	 * Begin sampling the viewer's target every tick for ~3 seconds. Object
 	 * and NPC sources are pinned to their nearest instance up front;
@@ -3191,6 +3183,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			frame = local == null ? -1 : local.getAnimationFrame();
 		}
 
+		if (model == null && !recordXs.isEmpty())
+		{
+			// Source vanished mid-recording (a gfx ended, an NPC died); ship
+			// what was sampled instead of waiting out the window
+			recordTicksLeft = 0;
+		}
 		if (model != null)
 		{
 			if (recordSnapshot == null)
@@ -3246,9 +3244,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		recordZs.clear();
 		recordFrames.clear();
 
-		// The recording's own topology becomes the snapshot so scrubber
-		// positions and pick indices line up exactly; keep the target name
-		pushViewerSnapshot(snapshot, null, false);
+		// Recordings piggyback on the snapshot already in the viewer - no
+		// re-push, so the camera and picks are undisturbed; the viewer drops
+		// any recording whose topology no longer matches what it shows
 		SwingUtilities.invokeLater(() ->
 		{
 			if (viewerFrame != null)
@@ -3352,6 +3350,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 					graphicProfileEntries(), recentGfx);
 			}
 		});
+		// Auto-record so an animation performed right after refreshing lands
+		// in the scrubber without a separate action
+		startRecording(-1, -1, -1);
 	}
 
 	/**
@@ -3391,6 +3392,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		}
 		String name = cleanTargetName(client.getObjectDefinition(objectId).getName());
 		pushNonPlayerSnapshot(ModelSnapshot.capture(model), name);
+		if (best != null && objectAnimFrame(best) >= 0)
+		{
+			// Animated placement: auto-record its cycle for the scrubber
+			startRecording(objectId, -1, -1);
+		}
 	}
 
 	/**
@@ -3442,6 +3448,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			return;
 		}
 		pushNonPlayerSnapshot(ModelSnapshot.capture(model), name);
+		if (best != null)
+		{
+			// Live NPC: auto-record its current animation for the scrubber
+			startRecording(-1, npcId, -1);
+		}
 	}
 
 	/**
@@ -3558,7 +3569,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			pendingGraphicCapture = graphicId;
 			return;
 		}
-		pushGraphicSnapshot(model);
+		pushGraphicSnapshot(graphicId, model);
 	}
 
 	@Nullable
@@ -3594,7 +3605,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		return null;
 	}
 
-	private void pushGraphicSnapshot(Model model)
+	private void pushGraphicSnapshot(int graphicId, Model model)
 	{
 		pendingGraphicCapture = -1;
 		pushNonPlayerSnapshot(ModelSnapshot.capture(model), null);
@@ -3605,6 +3616,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				viewerFrame.showModelView();
 			}
 		});
+		// Auto-record while the graphic is still playing
+		startRecording(-1, -1, graphicId);
 	}
 
 	@Nullable

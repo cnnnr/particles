@@ -15,7 +15,6 @@ import javax.swing.BorderFactory;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
 import javax.swing.JColorChooser;
 import javax.swing.JComboBox;
 import javax.swing.JFrame;
@@ -87,12 +86,6 @@ class ModelViewerFrame extends JFrame
 		 * viewer for vertex picking.
 		 */
 		void loadGraphic(int graphicId);
-
-		/**
-		 * Sample the loaded target's animated mesh every tick for a few
-		 * seconds; the result arrives via setRecording.
-		 */
-		void recordAnimation();
 
 		/**
 		 * Pose the loaded NPC's cache mesh at every frame of this animation
@@ -312,14 +305,11 @@ class ModelViewerFrame extends JFrame
 			}
 		});
 
-		JButton refresh = new JButton("Refresh snapshot");
+		JButton refresh = new JButton("Refresh");
+		refresh.setToolTipText("Recapture the target, auto-recording ~3 seconds of its animation for the scrubber - trigger an animation right after clicking to catch it");
 		refresh.addActionListener(e -> callbacks.refreshSnapshot());
 
-		JButton record = new JButton("Record anim (3s)");
-		record.setToolTipText("Sample the loaded target's animated mesh every tick for ~3 seconds, then scrub below the viewport to pick vertices on any frame. Trigger the animation while it records.");
-		record.addActionListener(e -> callbacks.recordAnimation());
-
-		JButton pose = new JButton("Pose anim (cache)");
+		JButton pose = new JButton("Pose");
 		pose.setToolTipText("NPC snapshots only: pose the cache mesh at every exact frame of an animation ID and scrub - nothing needs to play in game");
 		pose.addActionListener(e ->
 		{
@@ -341,11 +331,13 @@ class ModelViewerFrame extends JFrame
 			}
 		});
 
+		JPanel actionRow = new JPanel(new GridLayout(1, 2, 4, 0));
+		actionRow.add(refresh);
+		actionRow.add(pose);
+
 		JPanel top = new JPanel(new GridLayout(0, 1, 0, 4));
 		top.add(modeSelector);
-		top.add(refresh);
-		top.add(record);
-		top.add(pose);
+		top.add(actionRow);
 
 		JButton addProjectile = new JButton("Add");
 		addProjectile.setToolTipText("Create a profile for the typed projectile ID, or the selected capture row");
@@ -385,9 +377,6 @@ class ModelViewerFrame extends JFrame
 		graphicAddPanel.add(graphicIdField, BorderLayout.CENTER);
 		graphicAddPanel.add(graphicButtons, BorderLayout.EAST);
 
-		JCheckBox labelAll = new JCheckBox("Label emitter vertices");
-		labelAll.addActionListener(e -> viewport.setLabelAll(labelAll.isSelected()));
-
 		JPanel left = new JPanel(new BorderLayout(0, 6));
 		left.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 		left.add(top, BorderLayout.NORTH);
@@ -395,10 +384,7 @@ class ModelViewerFrame extends JFrame
 
 		JPanel bottom = new JPanel(new BorderLayout(0, 6));
 		bottom.add(addPanelHolder, BorderLayout.NORTH);
-		JPanel bottomMid = new JPanel(new BorderLayout(0, 6));
-		bottomMid.add(labelAll, BorderLayout.NORTH);
-		bottomMid.add(buildStyleEditor(), BorderLayout.CENTER);
-		bottom.add(bottomMid, BorderLayout.CENTER);
+		bottom.add(buildStyleEditor(), BorderLayout.CENTER);
 		left.add(bottom, BorderLayout.SOUTH);
 		left.setPreferredSize(new Dimension(250, 0));
 
@@ -487,6 +473,12 @@ class ModelViewerFrame extends JFrame
 	 */
 	void setRecording(float[][] xs, float[][] ys, float[][] zs, int[] frames)
 	{
+		// Recordings arrive without re-pushing a snapshot, so ignore any
+		// whose topology doesn't match what the viewer currently shows
+		if (snapshot == null || xs.length == 0 || xs[0].length != snapshot.getVertexCount())
+		{
+			return;
+		}
 		recordingXs = xs;
 		recordingYs = ys;
 		recordingZs = zs;
