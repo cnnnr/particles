@@ -4,21 +4,25 @@
 
 ## What it does
 
-Cosmetic 3D particle effects for your gear.
+Cosmetic 3D particle effects across the game world.
 
 Effects are predefined per item rather than user-customized, so particles stay cohesive and consistent for everyone.
 
-## Supported gear
+Particles aren't just for worn gear anymore — they also attach to **scenery** (torches, fires, altars, and more) and to **spell and weapon effects** like scythe swings and thrall summons.
 
-The plugin includes a preset pack covering popular items, including:
+## Supported content
 
-- Max capes
-- All halos
-- Crystal crowns
-- Ancient sceptres
-- Scythe of vitur ornament kits, Tumeken's shadow, nightmare staves, dragonfire shield
+The plugin includes a preset pack covering popular content, including:
 
-Each preset can be toggled individually.
+- **Gear** — max capes, all halos, crystal crowns, ancient sceptres, Scythe of Vitur ornament kits, Tumeken's shadow, nightmare staves, dragonfire shield, and more
+- **Scenery** — wall torches, campfires, fires, altars, fairy rings, portal nexus
+- **Effects** — scythe swings (all styles) and thrall summons
+
+Each preset can be toggled individually from the sidebar.
+
+## Suggestions
+
+Want particles on something that isn't covered yet? Open an issue on GitHub with the **enhancement** label and include any details or illustrations of what you'd like to see.
 
 ## Settings
 

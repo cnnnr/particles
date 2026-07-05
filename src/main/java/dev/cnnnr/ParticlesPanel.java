@@ -3,10 +3,13 @@ package dev.cnnnr;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Cursor;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -51,10 +54,11 @@ class ParticlesPanel extends PluginPanel
 	{
 		ALL("All", false),
 		PLAYER("Player", false),
-		PROJECTILE("Proj", true),
 		WORLD("World", false),
-		NPC("NPC", false),
-		GRAPHIC("Gfx", false);
+		GRAPHIC("Gfx", false),
+		NPC("NPC", true),
+		PROJECTILE("Proj", true);
+
 
 		private final String label;
 		/**
@@ -241,6 +245,21 @@ class ParticlesPanel extends PluginPanel
 		north.add(controls, BorderLayout.NORTH);
 		add(north, BorderLayout.NORTH);
 		add(profileList, BorderLayout.CENTER);
+
+		// Under the profile list: a link to the hub page's suggestions
+		JLabel suggest = new JLabel("<html>Learn how to submit suggestions <u>here</u></html>");
+		suggest.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		suggest.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		suggest.setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
+		suggest.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				LinkBrowser.browse("https://runelite.net/plugin-hub/show/particles");
+			}
+		});
+		add(suggest, BorderLayout.SOUTH);
 	}
 
 	/**
