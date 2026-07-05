@@ -170,7 +170,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * only way to see the player view locally. Safe to ship true by accident
 	 * - players already run without developer mode.
 	 */
-	private static final boolean PREVIEW_PLAYER_VIEW = false;
+	private static final boolean PREVIEW_PLAYER_VIEW = true;
 
 	/**
 	 * Authoring tools (vertex picker, profile edit controls) only exist in

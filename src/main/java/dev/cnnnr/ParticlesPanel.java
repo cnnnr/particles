@@ -47,7 +47,7 @@ class ParticlesPanel extends PluginPanel
 		ALL("All", false),
 		PLAYER("Player", false),
 		PROJECTILE("Proj", true),
-		WORLD("World", true),
+		WORLD("World", false),
 		NPC("NPC", true),
 		GRAPHIC("Gfx", true),
 		ANIMATED("Anim", true);
