@@ -10,8 +10,6 @@ Effects are predefined per item rather than user-customized, so particles stay c
 
 ## Supported content
 
-The plugin includes a preset pack covering popular content, including:
-
 - **Gear** - max capes, halos, crystal crowns, ancient sceptres, Scythe of Vitur and ornament kits, Tumeken's shadow, nightmare staves, dragonfire shield, and more
 - **Scenery** - wall torches, campfires, fires, altars, fairy rings, portal nexus
 - **Effects** - scythe swings and thrall summons
