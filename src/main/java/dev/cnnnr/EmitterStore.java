@@ -35,6 +35,13 @@ class EmitterStore
 
 	private final ConfigManager configManager;
 	private final Gson gson;
+	/**
+	 * In developer mode the config is the source of truth so authoring edits
+	 * persist across reloads; shipped users instead take all profile content
+	 * from the bundled pack and contribute only their enable/disable toggles,
+	 * so preset style updates and new fields reach them on every update.
+	 */
+	private final boolean developerMode;
 	private final Map<String, EmitterProfile> profiles = new LinkedHashMap<>();
 	private int revision;
 
@@ -44,10 +51,11 @@ class EmitterStore
 	@Setter
 	private Runnable changeListener;
 
-	EmitterStore(ConfigManager configManager, Gson gson)
+	EmitterStore(ConfigManager configManager, Gson gson, boolean developerMode)
 	{
 		this.configManager = configManager;
 		this.gson = gson;
+		this.developerMode = developerMode;
 	}
 
 	synchronized void load()
@@ -58,14 +66,19 @@ class EmitterStore
 	}
 
 	/**
-	 * Merge a user's saved config with the bundled preset pack and run
-	 * migrations. Package-private so the seed/merge contract can be tested
-	 * without a ConfigManager.
+	 * Combine a user's saved config with the bundled preset pack and run
+	 * migrations. Package-private so the contract can be tested without a
+	 * ConfigManager.
 	 *
-	 * Fresh config (null/empty) seeds the whole bundle. A returning user
-	 * keeps every saved profile - preserving their on/off toggles and any
-	 * dev edits - and only gains presets that are NEW in this version's
-	 * bundle (putIfAbsent never overwrites a saved key).
+	 * Developer mode: the config is the source of truth (authoring edits
+	 * persist); the bundle only seeds a fresh, empty config, and presets are
+	 * updated by re-exporting the config to presets.json.
+	 *
+	 * Shipped users: the bundle is the source of truth for CONTENT - every
+	 * profile is taken wholesale from presets.json, so style changes and new
+	 * fields ship on update - and only the user's enable/disable toggle is
+	 * carried over from their saved config (the one thing they can change).
+	 * A profile the bundle no longer contains is kept from the saved config.
 	 */
 	Map<String, EmitterProfile> mergeWithBundle(@Nullable String savedJson)
 	{
@@ -73,19 +86,36 @@ class EmitterStore
 		Map<String, EmitterProfile> bundled = parse(loadBundledPresets());
 
 		Map<String, EmitterProfile> result = new LinkedHashMap<>();
-		if (saved == null || saved.isEmpty())
+		if (developerMode)
 		{
-			if (bundled != null)
+			if (saved != null && !saved.isEmpty())
+			{
+				result.putAll(saved);
+			}
+			else if (bundled != null)
 			{
 				result.putAll(bundled);
 			}
 		}
 		else
 		{
-			result.putAll(saved);
 			if (bundled != null)
 			{
-				bundled.forEach(result::putIfAbsent);
+				bundled.forEach((key, profile) ->
+				{
+					EmitterProfile prior = saved == null ? null : saved.get(key);
+					if (prior != null)
+					{
+						// Content from the bundle, toggle from the user
+						profile.setEnabled(prior.isEnabled());
+					}
+					result.put(key, profile);
+				});
+			}
+			if (saved != null)
+			{
+				// Anything the bundle dropped (or the user created) survives
+				saved.forEach(result::putIfAbsent);
 			}
 		}
 

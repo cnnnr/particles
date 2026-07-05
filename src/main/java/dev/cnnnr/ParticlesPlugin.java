@@ -523,7 +523,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		configManager.unsetConfiguration(ParticlesConfig.GROUP, "justMe");
 
 		renderer = new ParticleRenderer(client);
-		store = new EmitterStore(configManager, gson);
+		store = new EmitterStore(configManager, gson, developerMode);
 		store.load();
 		store.setChangeListener(this::refreshPanel);
 
