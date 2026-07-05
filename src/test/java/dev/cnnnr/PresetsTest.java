@@ -34,15 +34,33 @@ public class PresetsTest
 			profiles.forEach((key, profile) ->
 			{
 				assertNotNull("profile " + key + " has no name", profile.getName());
-				if (EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType()))
-				{
-					assertNotNull("player profile " + key + " has no signature", profile.getSignature());
-					assertFalse("player profile " + key + " has no vertices", profile.getVertices().isEmpty());
-				}
-				else
+				if (profile.isProjectileTarget())
 				{
 					assertTrue("projectile profile " + key + " has no projectile id",
 						profile.getProjectileId() >= 0);
+				}
+				else if (profile.isGraphicTarget())
+				{
+					assertTrue("graphic profile " + key + " has no graphic id",
+						profile.getGraphicId() >= 0);
+				}
+				else if (profile.isObjectTarget())
+				{
+					assertTrue("object profile " + key + " has no object id", profile.getObjectId() >= 0);
+					assertNotNull("object profile " + key + " has no signature", profile.getSignature());
+					assertFalse("object profile " + key + " has no vertices", profile.getVertices().isEmpty());
+				}
+				else if (profile.isNpcTarget())
+				{
+					assertTrue("npc profile " + key + " has no npc id", profile.getNpcId() >= 0);
+					assertNotNull("npc profile " + key + " has no signature", profile.getSignature());
+					assertFalse("npc profile " + key + " has no vertices", profile.getVertices().isEmpty());
+				}
+				else
+				{
+					// Player target
+					assertNotNull("player profile " + key + " has no signature", profile.getSignature());
+					assertFalse("player profile " + key + " has no vertices", profile.getVertices().isEmpty());
 				}
 				int move = profile.getMovementLifetime();
 				assertTrue("movementLifetime out of range in " + key, move >= 10 && move <= 100);
