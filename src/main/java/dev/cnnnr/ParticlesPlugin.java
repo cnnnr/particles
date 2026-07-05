@@ -3208,9 +3208,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				recordFrames.clear();
 				return;
 			}
-			recordXs.add(model.getVerticesX().clone());
-			recordYs.add(model.getVerticesY().clone());
-			recordZs.add(model.getVerticesZ().clone());
+			// Trim to the logical vertex count: live model arrays are backing
+			// buffers that can run longer than the vertices they hold
+			int count = recordSnapshot.getVertexCount();
+			recordXs.add(Arrays.copyOf(model.getVerticesX(), count));
+			recordYs.add(Arrays.copyOf(model.getVerticesY(), count));
+			recordZs.add(Arrays.copyOf(model.getVerticesZ(), count));
 			recordFrames.add(frame);
 		}
 
@@ -3524,9 +3527,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				log.debug("Cache pose aborted: vertex count changed at frame {}", f);
 				return;
 			}
-			xs[f] = posed.getVerticesX().clone();
-			ys[f] = posed.getVerticesY().clone();
-			zs[f] = posed.getVerticesZ().clone();
+			int count = topology.getVertexCount();
+			xs[f] = Arrays.copyOf(posed.getVerticesX(), count);
+			ys[f] = Arrays.copyOf(posed.getVerticesY(), count);
+			zs[f] = Arrays.copyOf(posed.getVerticesZ(), count);
 			frames[f] = f;
 		}
 

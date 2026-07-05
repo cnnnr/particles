@@ -198,7 +198,9 @@ class ViewportPanel extends JPanel
 	 */
 	void setPositionOverride(float[] xs, float[] ys, float[] zs)
 	{
-		if (snapshot != null && xs != null && xs.length != snapshot.getVertexCount())
+		// Live model arrays are backing buffers that may run longer than the
+		// vertex count; only reject arrays too SHORT to project safely
+		if (snapshot != null && xs != null && xs.length < snapshot.getVertexCount())
 		{
 			return;
 		}
