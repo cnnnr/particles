@@ -53,8 +53,8 @@ class ParticlesPanel extends PluginPanel
 		PLAYER("Player", false),
 		PROJECTILE("Proj", true),
 		WORLD("World", false),
-		NPC("NPC", true),
-		GRAPHIC("Gfx", true);
+		NPC("NPC", false),
+		GRAPHIC("Gfx", false);
 
 		private final String label;
 		/**
