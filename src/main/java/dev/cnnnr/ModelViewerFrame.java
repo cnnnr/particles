@@ -119,6 +119,27 @@ class ModelViewerFrame extends JFrame
 	}
 
 	/**
+	 * A spot anim / graphics ID recently seen, for the graphics capture
+	 * list. Spot anims have no name in the cache, so source is who played
+	 * it ("tile" for a graphics object).
+	 */
+	static class GraphicSighting
+	{
+		final int id;
+		final String source;
+		final int count;
+		final int secondsAgo;
+
+		GraphicSighting(int id, String source, int count, int secondsAgo)
+		{
+			this.id = id;
+			this.source = source;
+			this.count = count;
+			this.secondsAgo = secondsAgo;
+		}
+	}
+
+	/**
 	 * One list entry per profile, or per piece if it has no profiles.
 	 */
 	static class ProfileEntry
@@ -234,7 +255,7 @@ class ModelViewerFrame extends JFrame
 	private List<ProfileEntry> npcEntries = List.of();
 	private List<ObjectSighting> npcSightings = List.of();
 	private List<ProfileEntry> graphicEntries = List.of();
-	private List<int[]> recentGraphics = List.of();
+	private List<GraphicSighting> recentGraphics = List.of();
 
 	ModelViewerFrame(Callbacks callbacks)
 	{
@@ -947,7 +968,7 @@ class ModelViewerFrame extends JFrame
 		List<ProfileEntry> projectileEntries, List<int[]> recentProjectiles,
 		List<ProfileEntry> objectEntries, List<ObjectSighting> objectSightings,
 		List<ProfileEntry> npcEntries, List<ObjectSighting> npcSightings,
-		List<ProfileEntry> graphicEntries, List<int[]> recentGraphics)
+		List<ProfileEntry> graphicEntries, List<GraphicSighting> recentGraphics)
 	{
 		this.snapshot = snapshot;
 		this.profilesBySignature = profilesBySignature;
@@ -1163,10 +1184,12 @@ class ModelViewerFrame extends JFrame
 					selectRow = rows.size() - 1;
 				}
 			}
-			for (int[] recent : recentGraphics)
+			for (GraphicSighting recent : recentGraphics)
 			{
-				rowListModel.addElement("seen: " + recent[0] + "  (" + recent[1] + "x, " + recent[2] + "s ago)");
-				rows.add(new Row(-1, null, recent[0]));
+				String from = recent.source == null || recent.source.isEmpty() ? "" : " " + recent.source;
+				rowListModel.addElement("seen: " + recent.id + from
+					+ "  (" + recent.count + "x, " + recent.secondsAgo + "s ago)");
+				rows.add(new Row(-1, null, recent.id));
 			}
 			if (rows.isEmpty())
 			{

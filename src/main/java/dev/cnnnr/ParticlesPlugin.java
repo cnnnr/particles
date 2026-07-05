@@ -356,6 +356,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private final Map<Integer, long[]> recentGraphics = new LinkedHashMap<>();
 	/**
+	 * Last-seen source label per graphic ID (the actor who played it, or
+	 * "tile"); spot anims have no cache name, so this stands in for one.
+	 */
+	private final Map<Integer, String> recentGraphicSource = new HashMap<>();
+	/**
 	 * Graphic ID armed for deferred viewer capture: spell gfx are gone
 	 * before Load can be clicked, so the mesh is grabbed the next time the
 	 * graphic plays. -1 when idle. Client thread.
@@ -573,6 +578,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			npcEmitters.clear();
 			graphicCarries.clear();
 			recentGraphics.clear();
+			recentGraphicSource.clear();
 			pendingGraphicCapture = -1;
 			projectileTrackers.clear();
 			activeProjectileProfiles.clear();
@@ -690,15 +696,16 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	@Subscribe
 	public void onGraphicsObjectCreated(GraphicsObjectCreated event)
 	{
-		noteGraphic(event.getGraphicsObject().getId());
+		noteGraphic(event.getGraphicsObject().getId(), "tile");
 	}
 
 	@Subscribe
 	public void onGraphicChanged(GraphicChanged event)
 	{
+		String source = actorLabel(event.getActor());
 		for (ActorSpotAnim spotAnim : event.getActor().getSpotAnims())
 		{
-			noteGraphic(spotAnim.getId());
+			noteGraphic(spotAnim.getId(), source);
 		}
 	}
 
@@ -714,16 +721,17 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			if (!graphic.finished())
 			{
-				noteGraphic(graphic.getId());
+				noteGraphic(graphic.getId(), "tile");
 			}
 		}
 		for (Player p : client.getTopLevelWorldView().players())
 		{
 			if (p != null)
 			{
+				String source = actorLabel(p);
 				for (ActorSpotAnim spotAnim : p.getSpotAnims())
 				{
-					noteGraphic(spotAnim.getId());
+					noteGraphic(spotAnim.getId(), source);
 				}
 			}
 		}
@@ -731,9 +739,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			if (npc != null)
 			{
+				String source = actorLabel(npc);
 				for (ActorSpotAnim spotAnim : npc.getSpotAnims())
 				{
-					noteGraphic(spotAnim.getId());
+					noteGraphic(spotAnim.getId(), source);
 				}
 			}
 		}
@@ -743,13 +752,18 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * Record a spot anim / graphics ID sighting for the capture list,
 	 * evicting the stalest entry past the cap.
 	 */
-	private void noteGraphic(int id)
+	private void noteGraphic(int id, String source)
 	{
 		long[] seen = recentGraphics.get(id);
 		if (seen != null)
 		{
 			seen[0]++;
 			seen[1] = System.currentTimeMillis();
+			if (source != null && !"tile".equals(source))
+			{
+				// Prefer a named actor source over the generic tile label
+				recentGraphicSource.put(id, source);
+			}
 			return;
 		}
 		if (recentGraphics.size() >= 24)
@@ -765,8 +779,24 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				}
 			}
 			recentGraphics.remove(oldestId);
+			recentGraphicSource.remove(oldestId);
 		}
 		recentGraphics.put(id, new long[]{1, System.currentTimeMillis()});
+		recentGraphicSource.put(id, source);
+	}
+
+	/**
+	 * A short label for a graphic's source: the actor's name, else "player"
+	 * or "npc" when unnamed.
+	 */
+	private static String actorLabel(Actor actor)
+	{
+		String name = cleanTargetName(actor.getName());
+		if (name != null)
+		{
+			return name;
+		}
+		return actor instanceof NPC ? "npc" : "player";
 	}
 
 	@Subscribe
@@ -2320,7 +2350,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 					{
 						vertices[i] = globals.get(i);
 					}
-					int[][] chains = style.getFeatherStrength() > 0
+					int[][] chains = style.getFeatherStrength() > 0 || style.getInterpolation() > 0
 						? buildChains(snapshot, piece, vertices)
 						: null;
 					oe.emitters.add(new ActiveEmitter(style, vertices, chains));
@@ -2842,7 +2872,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * @return false when the particle budget is exhausted
 	 */
 	private boolean spawnGraphicBatch(GraphicEmitter ge, @Nullable Model model, int count,
-		float baseX, float baseY, float baseZ, int budget, double[] carries, int gi)
+		float baseX, float baseY, float baseZ, int sin, int cos, int budget, double[] carries, int gi)
 	{
 		ParticleStyle style = ge.style;
 		float ox = baseX + style.getOffsetX();
@@ -2863,6 +2893,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		boolean feathered = style.getFeatherStrength() > 0;
 		boolean interpolated = !feathered && style.getInterpolation() > 0;
 		boolean[] visible = feathered ? null : visibleVertexMask(model);
+		float[] vx = model.getVerticesX();
+		float[] vy = model.getVerticesY();
+		float[] vz = model.getVerticesZ();
 		for (int i = 0; i < count; i++)
 		{
 			if (particleSystem.getParticles().size() >= budget)
@@ -2874,12 +2907,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				: ge.resolved.get(random.nextInt(ge.resolved.size()));
 			if (feathered && emitter.chains != null)
 			{
-				fillGraphicAnchors(emitter, model, ox, oy, oz, null);
+				fillGraphicAnchors(emitter, model, ox, oy, oz, sin, cos, null);
 				spawnFeatheredStatic(gfxAnchorXs, gfxAnchorYs, gfxAnchorZs, emitter);
 			}
 			else if (interpolated && emitter.chains != null)
 			{
-				fillGraphicAnchors(emitter, model, ox, oy, oz, visible);
+				fillGraphicAnchors(emitter, model, ox, oy, oz, sin, cos, visible);
 				int a = pickVisibleAnchor(emitter.anchorCount);
 				if (a < 0)
 				{
@@ -2896,8 +2929,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 					carries[gi] = 0;
 					return true;
 				}
-				spawnAt(style, ox + model.getVerticesX()[v], oy + model.getVerticesZ()[v],
-					oz + model.getVerticesY()[v], 1f);
+				// Rotate the spot anim's local mesh by the actor's facing, the
+				// same transform the player anchor path uses; graphics objects
+				// pass identity (they are already world-oriented per direction)
+				spawnAt(style, ox + (vz[v] * sin + vx[v] * cos) / 65536f,
+					oy + (vz[v] * cos - vx[v] * sin) / 65536f, oz + vy[v], 1f);
 			}
 		}
 		return true;
@@ -2973,7 +3009,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	}
 
 	private void fillGraphicAnchors(ActiveEmitter emitter, Model model, float ox, float oy, float oz,
-		@Nullable boolean[] vertexMask)
+		int sin, int cos, @Nullable boolean[] vertexMask)
 	{
 		int real = emitter.vertices.length;
 		int n = real + emitter.extraAnchors;
@@ -3002,8 +3038,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				gfxAnchorVisible[k] = false;
 				continue;
 			}
-			gfxAnchorXs[k] = ox + vx[v];
-			gfxAnchorYs[k] = oy + vz[v];
+			gfxAnchorXs[k] = ox + (vz[v] * sin + vx[v] * cos) / 65536f;
+			gfxAnchorYs[k] = oy + (vz[v] * cos - vx[v] * sin) / 65536f;
 			gfxAnchorZs[k] = oz + vy[v];
 			gfxAnchorVisible[k] = vertexMask == null || (v < vertexMask.length && vertexMask[v]);
 		}
@@ -3108,7 +3144,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 					{
 						vertices[i] = globals.get(i);
 					}
-					int[][] chains = style.getFeatherStrength() > 0
+					int[][] chains = style.getFeatherStrength() > 0 || style.getInterpolation() > 0
 						? buildChains(snapshot, piece, vertices)
 						: null;
 					pe.emitters.add(new ActiveEmitter(style, vertices, chains));
@@ -3118,9 +3154,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	}
 
 	/**
-	 * Point emission for graphic profiles matching the actor's active spot
-	 * anims (vengeance, skulls, teleports). No vertices or feathering - the
-	 * anchor is the actor's base height plus the spot anim's height offset.
+	 * Emission for graphic profiles matching the actor's active spot anims
+	 * (vengeance, skulls, teleports, weapon swipes). Point-based when no
+	 * vertices were picked; vertex-anchored spot anims rotate their local
+	 * mesh by the actor's facing, like the player and NPC anchor paths.
 	 */
 	private void emitActorSpotAnims(float dt, PlayerEmitters pe, Actor actor)
 	{
@@ -3131,6 +3168,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		int budget = config.maxParticles();
 		float densityScale = config.density().getFactor();
 		LocalPoint lp = actor.getLocalLocation();
+		// Spot anim models are authored facing orientation 0 and the engine
+		// turns them with the actor; mirror that here so anchors track facing
+		int orientation = actor.getCurrentOrientation();
+		int sin = Perspective.SINE[orientation];
+		int cos = Perspective.COSINE[orientation];
 		int actorBase = Integer.MIN_VALUE;
 		for (ActorSpotAnim spotAnim : actor.getSpotAnims())
 		{
@@ -3182,7 +3224,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 						- actor.getAnimationHeightOffset();
 				}
 				float z = actorBase - spotAnim.getHeight();
-				if (!spawnGraphicBatch(ge, model, count, lp.getX(), lp.getY(), z, budget, carries, gi))
+				if (!spawnGraphicBatch(ge, model, count, lp.getX(), lp.getY(), z, sin, cos,
+					budget, carries, gi))
 				{
 					return;
 				}
@@ -3242,8 +3285,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				carries[gi] += Math.min(ge.style.getParticlesPerSecond() * densityScale, sustainable) * dt;
 				int count = (int) carries[gi];
 				carries[gi] -= count;
+				// Identity rotation: graphics objects place a per-direction
+				// model already in world orientation
 				if (count > 0 && !spawnGraphicBatch(ge, model, count, lp.getX(), lp.getY(),
-					graphic.getZ(), budget, carries, gi))
+					graphic.getZ(), 0, 65536, budget, carries, gi))
 				{
 					return;
 				}
@@ -3295,21 +3340,22 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	}
 
 	/**
-	 * Recently seen spot anim / graphics IDs as [id, count, secondsAgo],
-	 * newest first. Client thread.
+	 * Recently seen spot anims / graphics with their source label, newest
+	 * first. Client thread.
 	 */
-	private List<int[]> recentGraphicList()
+	private List<ModelViewerFrame.GraphicSighting> recentGraphicList()
 	{
 		long nowMs = System.currentTimeMillis();
-		List<int[]> out = new ArrayList<>(recentGraphics.size());
+		List<ModelViewerFrame.GraphicSighting> out = new ArrayList<>(recentGraphics.size());
 		for (Map.Entry<Integer, long[]> entry : recentGraphics.entrySet())
 		{
-			out.add(new int[]{
-				entry.getKey(),
+			int id = entry.getKey();
+			out.add(new ModelViewerFrame.GraphicSighting(id,
+				recentGraphicSource.getOrDefault(id, ""),
 				(int) entry.getValue()[0],
-				(int) ((nowMs - entry.getValue()[1]) / 1000)});
+				(int) ((nowMs - entry.getValue()[1]) / 1000)));
 		}
-		out.sort((a, b) -> Integer.compare(a[2], b[2]));
+		out.sort((a, b) -> Integer.compare(a.secondsAgo, b.secondsAgo));
 		return out;
 	}
 
@@ -3617,7 +3663,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		List<int[]> recent = recentProjectileList();
 		List<ModelViewerFrame.ObjectSighting> sightings = nearbySightings();
 		List<ModelViewerFrame.ObjectSighting> npcs = npcSightings();
-		List<int[]> recentGfx = recentGraphicList();
+		List<ModelViewerFrame.GraphicSighting> recentGfx = recentGraphicList();
 		SwingUtilities.invokeLater(() ->
 		{
 			viewerSnapshot = snapshot;
@@ -3955,7 +4001,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		List<int[]> recent = recentProjectileList();
 		List<ModelViewerFrame.ObjectSighting> sightings = nearbySightings();
 		List<ModelViewerFrame.ObjectSighting> npcs = npcSightings();
-		List<int[]> recentGfx = recentGraphicList();
+		List<ModelViewerFrame.GraphicSighting> recentGfx = recentGraphicList();
 		SwingUtilities.invokeLater(() ->
 		{
 			viewerSnapshot = snapshot;
