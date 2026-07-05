@@ -483,6 +483,20 @@ class EmitterStore
 		}
 	}
 
+	/**
+	 * Overwrite a profile's editable style with another profile's, for the
+	 * sidebar copy/paste flow.
+	 */
+	synchronized void pasteStyle(String profileKey, EmitterProfile source)
+	{
+		EmitterProfile profile = profiles.get(profileKey);
+		if (profile != null)
+		{
+			profile.copyStyleFrom(source);
+			save();
+		}
+	}
+
 	synchronized void delete(String profileKey)
 	{
 		if (profiles.remove(profileKey) != null)

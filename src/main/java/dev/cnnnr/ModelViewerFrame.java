@@ -196,6 +196,7 @@ class ModelViewerFrame extends JFrame
 	private final JSpinner spreadSpinner = new JSpinner(new SpinnerNumberModel(12, 0, 256, 2));
 	private final JSpinner jitterSpinner = new JSpinner(new SpinnerNumberModel(10, 0, 64, 1));
 	private final JSpinner featherSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 8, 1));
+	private final JSpinner interpolationSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 4, 1));
 	private final JSpinner depthBiasSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 64, 2));
 	private final JSpinner offsetXSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
 	private final JSpinner offsetYSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
@@ -599,6 +600,8 @@ class ModelViewerFrame extends JFrame
 		grid.add(jitterSpinner);
 		grid.add(new JLabel("Feather"));
 		grid.add(featherSpinner);
+		grid.add(new JLabel("Interpolate"));
+		grid.add(interpolationSpinner);
 		grid.add(new JLabel("Depth bias"));
 		grid.add(depthBiasSpinner);
 		grid.add(new JLabel("Offset X"));
@@ -642,6 +645,8 @@ class ModelViewerFrame extends JFrame
 		jitterSpinner.addChangeListener(e -> saveStyle());
 		featherSpinner.addChangeListener(e -> saveStyle());
 		featherSpinner.setToolTipText("Emit along a line chained through the emitter vertices, smoothed over this many neighbors (0 = off). Higher values cut across jagged notches; the marker overlay draws the resulting line.");
+		interpolationSpinner.addChangeListener(e -> saveStyle());
+		interpolationSpinner.setToolTipText("Insert this many extra emitter points between each pair of mesh-adjacent picked vertices - 1 roughly doubles the emitter count. Densifies emission on low-poly meshes.");
 		depthBiasSpinner.addChangeListener(e -> saveStyle());
 		depthBiasSpinner.setToolTipText("Nudge particles this many units toward the camera at render time, so garments that render over their neighbors (a cape over a skirt) don't swallow them. ~16-32 fixes clipping; too much floats particles in front of things.");
 		offsetXSpinner.addChangeListener(e -> saveStyle());
@@ -802,6 +807,7 @@ class ModelViewerFrame extends JFrame
 		spreadSpinner.setValue(profile.getSpreadSpeed());
 		jitterSpinner.setValue(profile.getSpawnJitter());
 		featherSpinner.setValue(profile.getFeatherStrength());
+		interpolationSpinner.setValue(profile.getInterpolation());
 		depthBiasSpinner.setValue(profile.getDepthBias());
 		offsetXSpinner.setValue(profile.getOffsetX());
 		offsetYSpinner.setValue(profile.getOffsetY());
@@ -823,6 +829,7 @@ class ModelViewerFrame extends JFrame
 		boolean npc = profile.isNpcTarget();
 		boolean actorTarget = EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType()) || npc;
 		featherSpinner.setEnabled(!projectile);
+		interpolationSpinner.setEnabled(!projectile);
 		offsetXSpinner.setEnabled(!projectile);
 		offsetYSpinner.setEnabled(!projectile);
 		offsetZSpinner.setEnabled(!projectile);
@@ -862,6 +869,7 @@ class ModelViewerFrame extends JFrame
 		spreadSpinner.setEnabled(enabled);
 		jitterSpinner.setEnabled(enabled);
 		featherSpinner.setEnabled(enabled);
+		interpolationSpinner.setEnabled(enabled);
 		depthBiasSpinner.setEnabled(enabled);
 		offsetXSpinner.setEnabled(enabled);
 		offsetYSpinner.setEnabled(enabled);
@@ -900,6 +908,7 @@ class ModelViewerFrame extends JFrame
 		profile.setSpreadSpeed((int) spreadSpinner.getValue());
 		profile.setSpawnJitter((int) jitterSpinner.getValue());
 		profile.setFeatherStrength((int) featherSpinner.getValue());
+		profile.setInterpolation((int) interpolationSpinner.getValue());
 		profile.setDepthBias((int) depthBiasSpinner.getValue());
 		profile.setOffsetX((int) offsetXSpinner.getValue());
 		profile.setOffsetY((int) offsetYSpinner.getValue());

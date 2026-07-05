@@ -42,6 +42,11 @@ class ParticleStyle
 	private final float spawnJitter;
 	private final int featherStrength;
 	/**
+	 * Midpoints inserted between mesh-adjacent emitter vertices;
+	 * see EmitterProfile.
+	 */
+	private final int interpolation;
+	/**
 	 * Camera-ward render nudge in local units; see EmitterProfile.
 	 */
 	private final float depthBias;
@@ -78,6 +83,7 @@ class ParticleStyle
 		this.spreadSpeed = profile.getSpreadSpeed();
 		this.spawnJitter = profile.getSpawnJitter();
 		this.featherStrength = profile.getFeatherStrength();
+		this.interpolation = Math.max(0, Math.min(4, profile.getInterpolation()));
 		this.depthBias = profile.getDepthBias();
 		this.movementLifetimeScale = Math.max(10, Math.min(100, profile.getMovementLifetime())) / 100f;
 		this.offsetX = profile.getOffsetX();

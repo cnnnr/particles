@@ -116,6 +116,12 @@ class EmitterProfile
 	 */
 	private int featherStrength = 0;
 	/**
+	 * Extra emitter points inserted between each pair of mesh-adjacent
+	 * picked vertices (1 roughly doubles the emitter count). Densifies
+	 * emission on low-poly meshes without feathering's smoothing.
+	 */
+	private int interpolation = 0;
+	/**
 	 * Nudge particles this many local units toward the camera at render
 	 * time. Garment faces that win by render priority (a cape over a skirt)
 	 * would otherwise swallow particles by plain depth; a small bias lets
@@ -203,6 +209,7 @@ class EmitterProfile
 		spreadSpeed = other.spreadSpeed;
 		spawnJitter = other.spawnJitter;
 		featherStrength = other.featherStrength;
+		interpolation = other.interpolation;
 		depthBias = other.depthBias;
 		movementLifetime = other.movementLifetime;
 		offsetX = other.offsetX;

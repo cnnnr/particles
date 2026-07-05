@@ -102,15 +102,35 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		 */
 		final int[] sampleChainOf;
 		final int[] samplePosOf;
+		/**
+		 * Interpolated midpoints appended after the real anchors, one set
+		 * per chain segment; zero when interpolation is off.
+		 */
+		final int extraAnchors;
 		double carry;
 		int anchorStart;
 		int anchorCount;
+		/**
+		 * Every real vertex resolved an anchor this tick, so chain indices
+		 * line up for feathering and interpolation.
+		 */
+		boolean featherReady;
 
 		ActiveEmitter(ParticleStyle style, int[] vertices, int[][] chains)
 		{
 			this.style = style;
 			this.vertices = vertices;
 			this.chains = chains;
+			int extra = 0;
+			if (chains != null && style.getInterpolation() > 0)
+			{
+				for (int[] chain : chains)
+				{
+					extra += Math.max(0, chain.length - 1);
+				}
+				extra *= style.getInterpolation();
+			}
+			this.extraAnchors = extra;
 			if (chains != null)
 			{
 				int total = 0;
@@ -505,7 +525,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		overlayManager.add(overlay);
 
 		panel = new ParticlesPanel(developerMode, this::openViewer, store::setEnabled, store::setEnabledAll,
-			store::delete, this::renameProfile, this::editProfile);
+			store::pasteStyle, store::delete, this::renameProfile, this::editProfile);
 		navButton = NavigationButton.builder()
 			.tooltip("Particles")
 			.icon(createIcon())
@@ -1303,7 +1323,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		int totalVertices = 0;
 		for (ActiveEmitter emitter : pe.emitters)
 		{
-			totalVertices += emitter.vertices.length;
+			totalVertices += emitter.vertices.length + emitter.extraAnchors;
 		}
 		if (pe.anchorXs.length < totalVertices)
 		{
@@ -1346,6 +1366,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				pe.anchorZs[pe.anchorCount] = playerBaseZ + vy;
 				pe.anchorCount++;
 				emitter.anchorCount++;
+			}
+			emitter.featherReady = emitter.anchorCount == emitter.vertices.length;
+			if (emitter.featherReady && emitter.extraAnchors > 0)
+			{
+				int end = appendInterpolatedAnchors(emitter, pe.anchorXs, pe.anchorYs, pe.anchorZs,
+					null, pe.anchorCount);
+				emitter.anchorCount += end - pe.anchorCount;
+				pe.anchorCount = end;
 			}
 		}
 
@@ -1521,7 +1549,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				{
 					vertices[i] = globals.get(i);
 				}
-				int[][] chains = style.getFeatherStrength() > 0
+				int[][] chains = style.getFeatherStrength() > 0 || style.getInterpolation() > 0
 					? buildChains(snapshot, piece, vertices)
 					: null;
 				pe.emitters.add(new ActiveEmitter(style, vertices, chains));
@@ -1823,7 +1851,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 			float lifeScale = moving ? style.getMovementLifetimeScale() : 1f;
 			boolean feathered = style.getFeatherStrength() > 0 && emitter.chains != null
-				&& emitter.anchorCount == emitter.vertices.length;
+				&& emitter.featherReady;
 			for (int i = 0; i < count; i++)
 			{
 				if (particleSystem.getParticles().size() >= budget)
@@ -2377,7 +2405,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		int total = 0;
 		for (ActiveEmitter emitter : oe.emitters)
 		{
-			total += emitter.vertices.length;
+			total += emitter.vertices.length + emitter.extraAnchors;
 		}
 		if (oe.anchorXs.length < total)
 		{
@@ -2408,6 +2436,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				oe.anchorZs[oe.anchorCount] = baseZ + vy[v] - style.getOffsetZ();
 				oe.anchorCount++;
 				emitter.anchorCount++;
+			}
+			emitter.featherReady = emitter.anchorCount == emitter.vertices.length;
+			if (emitter.featherReady && emitter.extraAnchors > 0)
+			{
+				int end = appendInterpolatedAnchors(emitter, oe.anchorXs, oe.anchorYs, oe.anchorZs,
+					null, oe.anchorCount);
+				emitter.anchorCount += end - oe.anchorCount;
+				oe.anchorCount = end;
 			}
 		}
 		if (markers && oe.anchorCount > 0)
@@ -2452,7 +2488,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			int count = (int) emitter.carry;
 			emitter.carry -= count;
 			boolean feathered = style.getFeatherStrength() > 0 && emitter.chains != null
-				&& emitter.anchorCount == emitter.vertices.length;
+				&& emitter.featherReady;
 			for (int i = 0; i < count; i++)
 			{
 				if (particleSystem.getParticles().size() >= budget)
@@ -2746,7 +2782,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				vertices[i] = globals.get(i);
 			}
-			int[][] chains = ge.style.getFeatherStrength() > 0
+			int[][] chains = ge.style.getFeatherStrength() > 0 || ge.style.getInterpolation() > 0
 				? buildChains(snapshot, piece, vertices)
 				: null;
 			ge.resolved.add(new ActiveEmitter(ge.style, vertices, chains));
@@ -2758,6 +2794,41 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	private float[] gfxAnchorXs = new float[0];
 	private float[] gfxAnchorYs = new float[0];
 	private float[] gfxAnchorZs = new float[0];
+	private boolean[] gfxAnchorVisible = new boolean[0];
+
+	/**
+	 * Append interpolated midpoints between chain-adjacent anchors, after
+	 * the emitter's real anchor block. Midpoint visibility (when tracked)
+	 * requires both endpoints visible.
+	 *
+	 * @return the write index after the appended anchors
+	 */
+	private static int appendInterpolatedAnchors(ActiveEmitter emitter,
+		float[] xs, float[] ys, float[] zs, @Nullable boolean[] visible, int writeIndex)
+	{
+		int interpolation = emitter.style.getInterpolation();
+		for (int[] chain : emitter.chains)
+		{
+			for (int j = 0; j + 1 < chain.length; j++)
+			{
+				int a = emitter.anchorStart + chain[j];
+				int b = emitter.anchorStart + chain[j + 1];
+				for (int s = 1; s <= interpolation; s++)
+				{
+					float t = s / (float) (interpolation + 1);
+					xs[writeIndex] = xs[a] + (xs[b] - xs[a]) * t;
+					ys[writeIndex] = ys[a] + (ys[b] - ys[a]) * t;
+					zs[writeIndex] = zs[a] + (zs[b] - zs[a]) * t;
+					if (visible != null)
+					{
+						visible[writeIndex] = visible[a] && visible[b];
+					}
+					writeIndex++;
+				}
+			}
+		}
+		return writeIndex;
+	}
 
 	/**
 	 * Spawn a batch for a graphic emitter at its base point. Vertex-based
@@ -2790,6 +2861,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			return true;
 		}
 		boolean feathered = style.getFeatherStrength() > 0;
+		boolean interpolated = !feathered && style.getInterpolation() > 0;
 		boolean[] visible = feathered ? null : visibleVertexMask(model);
 		for (int i = 0; i < count; i++)
 		{
@@ -2802,8 +2874,19 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				: ge.resolved.get(random.nextInt(ge.resolved.size()));
 			if (feathered && emitter.chains != null)
 			{
-				fillGraphicAnchors(emitter, model, ox, oy, oz);
+				fillGraphicAnchors(emitter, model, ox, oy, oz, null);
 				spawnFeatheredStatic(gfxAnchorXs, gfxAnchorYs, gfxAnchorZs, emitter);
+			}
+			else if (interpolated && emitter.chains != null)
+			{
+				fillGraphicAnchors(emitter, model, ox, oy, oz, visible);
+				int a = pickVisibleAnchor(emitter.anchorCount);
+				if (a < 0)
+				{
+					carries[gi] = 0;
+					return true;
+				}
+				spawnAt(style, gfxAnchorXs[a], gfxAnchorYs[a], gfxAnchorZs[a], 1f);
 			}
 			else
 			{
@@ -2818,6 +2901,20 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 		}
 		return true;
+	}
+
+	private int pickVisibleAnchor(int count)
+	{
+		int start = random.nextInt(count);
+		for (int i = 0; i < count; i++)
+		{
+			int a = (start + i) % count;
+			if (gfxAnchorVisible[a])
+			{
+				return a;
+			}
+		}
+		return -1;
 	}
 
 	/**
@@ -2875,20 +2972,26 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		return -1;
 	}
 
-	private void fillGraphicAnchors(ActiveEmitter emitter, Model model, float ox, float oy, float oz)
+	private void fillGraphicAnchors(ActiveEmitter emitter, Model model, float ox, float oy, float oz,
+		@Nullable boolean[] vertexMask)
 	{
-		int n = emitter.vertices.length;
+		int real = emitter.vertices.length;
+		int n = real + emitter.extraAnchors;
 		if (gfxAnchorXs.length < n)
 		{
 			gfxAnchorXs = new float[n];
 			gfxAnchorYs = new float[n];
 			gfxAnchorZs = new float[n];
 		}
+		if (gfxAnchorVisible.length < n)
+		{
+			gfxAnchorVisible = new boolean[n];
+		}
 		int vertexCount = model.getVerticesCount();
 		float[] vx = model.getVerticesX();
 		float[] vy = model.getVerticesY();
 		float[] vz = model.getVerticesZ();
-		for (int k = 0; k < n; k++)
+		for (int k = 0; k < real; k++)
 		{
 			int v = emitter.vertices[k];
 			if (v < 0 || v >= vertexCount)
@@ -2896,14 +2999,22 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				gfxAnchorXs[k] = ox;
 				gfxAnchorYs[k] = oy;
 				gfxAnchorZs[k] = oz;
+				gfxAnchorVisible[k] = false;
 				continue;
 			}
 			gfxAnchorXs[k] = ox + vx[v];
 			gfxAnchorYs[k] = oy + vz[v];
 			gfxAnchorZs[k] = oz + vy[v];
+			gfxAnchorVisible[k] = vertexMask == null || (v < vertexMask.length && vertexMask[v]);
 		}
 		emitter.anchorStart = 0;
-		emitter.anchorCount = n;
+		emitter.anchorCount = real;
+		emitter.featherReady = true;
+		if (emitter.extraAnchors > 0)
+		{
+			emitter.anchorCount = appendInterpolatedAnchors(emitter,
+				gfxAnchorXs, gfxAnchorYs, gfxAnchorZs, gfxAnchorVisible, real);
+		}
 	}
 
 	/**

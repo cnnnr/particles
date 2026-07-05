@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import javax.annotation.Nullable;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
@@ -22,8 +23,12 @@ import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.SwingConstants;
+import javax.swing.event.PopupMenuEvent;
+import javax.swing.event.PopupMenuListener;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import net.runelite.client.ui.ColorScheme;
@@ -107,6 +112,7 @@ class ParticlesPanel extends PluginPanel
 
 	private final boolean developerMode;
 	private final BiConsumer<String, Boolean> onToggleProfile;
+	private final BiConsumer<String, EmitterProfile> onPasteStyle;
 	private final Consumer<String> onDeleteProfile;
 	private final Consumer<String> onRenameProfile;
 	private final Consumer<String> onEditProfile;
@@ -116,13 +122,20 @@ class ParticlesPanel extends PluginPanel
 	private Category category = Category.ALL;
 	private Map<String, EmitterProfile> profiles = Map.of();
 	private Set<String> presentSignatures = Set.of();
+	/**
+	 * Style clipboard for the right-click copy/paste flow; a detached copy
+	 * so later edits or deletion of the source don't change what pastes.
+	 */
+	@Nullable
+	private EmitterProfile copiedStyle;
 
 	ParticlesPanel(boolean developerMode, Runnable openViewer, BiConsumer<String, Boolean> onToggleProfile,
-		BiConsumer<Set<String>, Boolean> onToggleMany, Consumer<String> onDeleteProfile,
-		Consumer<String> onRenameProfile, Consumer<String> onEditProfile)
+		BiConsumer<Set<String>, Boolean> onToggleMany, BiConsumer<String, EmitterProfile> onPasteStyle,
+		Consumer<String> onDeleteProfile, Consumer<String> onRenameProfile, Consumer<String> onEditProfile)
 	{
 		this.developerMode = developerMode;
 		this.onToggleProfile = onToggleProfile;
+		this.onPasteStyle = onPasteStyle;
 		this.onDeleteProfile = onDeleteProfile;
 		this.onRenameProfile = onRenameProfile;
 		this.onEditProfile = onEditProfile;
@@ -355,6 +368,40 @@ class ParticlesPanel extends PluginPanel
 			buttons.add(rename);
 			buttons.add(delete);
 			row.add(buttons, BorderLayout.EAST);
+
+			JPopupMenu menu = new JPopupMenu();
+			JMenuItem copyStyle = new JMenuItem("Copy style");
+			copyStyle.addActionListener(e -> copiedStyle = profile.copy());
+			JMenuItem pasteStyle = new JMenuItem("Paste style");
+			pasteStyle.addActionListener(e ->
+			{
+				if (copiedStyle != null)
+				{
+					onPasteStyle.accept(profileKey, copiedStyle);
+				}
+			});
+			menu.add(copyStyle);
+			menu.add(pasteStyle);
+			menu.addPopupMenuListener(new PopupMenuListener()
+			{
+				@Override
+				public void popupMenuWillBecomeVisible(PopupMenuEvent e)
+				{
+					pasteStyle.setEnabled(copiedStyle != null);
+				}
+
+				@Override
+				public void popupMenuWillBecomeInvisible(PopupMenuEvent e)
+				{
+				}
+
+				@Override
+				public void popupMenuCanceled(PopupMenuEvent e)
+				{
+				}
+			});
+			row.setComponentPopupMenu(menu);
+			toggle.setComponentPopupMenu(menu);
 		}
 
 		return row;
