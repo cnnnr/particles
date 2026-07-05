@@ -52,74 +52,107 @@ class EmitterStore
 
 	synchronized void load()
 	{
-		String json = configManager.getConfiguration(ParticlesConfig.GROUP, CONFIG_KEY);
-		if (json == null || json.isEmpty())
+		profiles.clear();
+		profiles.putAll(mergeWithBundle(
+			configManager.getConfiguration(ParticlesConfig.GROUP, CONFIG_KEY)));
+	}
+
+	/**
+	 * Merge a user's saved config with the bundled preset pack and run
+	 * migrations. Package-private so the seed/merge contract can be tested
+	 * without a ConfigManager.
+	 *
+	 * Fresh config (null/empty) seeds the whole bundle. A returning user
+	 * keeps every saved profile - preserving their on/off toggles and any
+	 * dev edits - and only gains presets that are NEW in this version's
+	 * bundle (putIfAbsent never overwrites a saved key).
+	 */
+	Map<String, EmitterProfile> mergeWithBundle(@Nullable String savedJson)
+	{
+		Map<String, EmitterProfile> saved = parse(savedJson);
+		Map<String, EmitterProfile> bundled = parse(loadBundledPresets());
+
+		Map<String, EmitterProfile> result = new LinkedHashMap<>();
+		if (saved == null || saved.isEmpty())
 		{
-			// Fresh install: seed from the bundled preset pack. Deliberately
-			// not saved back - the config stays empty until the user changes
-			// something, so plugin updates keep delivering preset updates
-			// until they do.
-			json = loadBundledPresets();
+			if (bundled != null)
+			{
+				result.putAll(bundled);
+			}
 		}
+		else
+		{
+			result.putAll(saved);
+			if (bundled != null)
+			{
+				bundled.forEach(result::putIfAbsent);
+			}
+		}
+
+		result.forEach((key, profile) ->
+		{
+			// Migration: profiles saved before item variants used their
+			// signature as the map key
+			if (profile.getSignature() == null)
+			{
+				profile.setSignature(key);
+			}
+			// Migration: single frame window fields became a range list
+			if ((profile.getAnimFrames() == null || profile.getAnimFrames().isEmpty())
+				&& (profile.getAnimFrameStart() >= 0 || profile.getAnimFrameEnd() >= 0))
+			{
+				int start = Math.max(0, profile.getAnimFrameStart());
+				int end = profile.getAnimFrameEnd() < 0 ? 999 : profile.getAnimFrameEnd();
+				profile.setAnimFrames(start + "-" + end);
+				profile.setAnimFrameStart(-1);
+				profile.setAnimFrameEnd(-1);
+			}
+			else if (profile.getAnimFrames() == null)
+			{
+				profile.setAnimFrames("");
+			}
+			// Migration: feather flag became a strength
+			if (profile.isFeather() && profile.getFeatherStrength() == 0)
+			{
+				profile.setFeatherStrength(2);
+				profile.setFeather(false);
+			}
+			// Migration: profiles saved before projectile targets
+			if (profile.getTargetType() == null)
+			{
+				profile.setTargetType(EmitterProfile.TARGET_PLAYER);
+			}
+			// Migration: dynamic lifetime flag became a movement percent
+			if (profile.isDynamicLifetime())
+			{
+				if (profile.getMovementLifetime() == 100)
+				{
+					profile.setMovementLifetime(50);
+				}
+				profile.setDynamicLifetime(false);
+			}
+		});
+		return result;
+	}
+
+	/**
+	 * Parse a profile-map JSON string, or null on empty/blank/malformed.
+	 */
+	@Nullable
+	private Map<String, EmitterProfile> parse(@Nullable String json)
+	{
 		if (json == null || json.isEmpty())
 		{
-			return;
+			return null;
 		}
 		try
 		{
-			Map<String, EmitterProfile> loaded = gson.fromJson(json, MAP_TYPE);
-			if (loaded != null)
-			{
-				profiles.clear();
-				profiles.putAll(loaded);
-				// Migration: profiles saved before item variants used their
-				// signature as the map key
-				profiles.forEach((key, profile) ->
-				{
-					if (profile.getSignature() == null)
-					{
-						profile.setSignature(key);
-					}
-					// Migration: single frame window fields became a range list
-					if ((profile.getAnimFrames() == null || profile.getAnimFrames().isEmpty())
-						&& (profile.getAnimFrameStart() >= 0 || profile.getAnimFrameEnd() >= 0))
-					{
-						int start = Math.max(0, profile.getAnimFrameStart());
-						int end = profile.getAnimFrameEnd() < 0 ? 999 : profile.getAnimFrameEnd();
-						profile.setAnimFrames(start + "-" + end);
-						profile.setAnimFrameStart(-1);
-						profile.setAnimFrameEnd(-1);
-					}
-					else if (profile.getAnimFrames() == null)
-					{
-						profile.setAnimFrames("");
-					}
-					// Migration: feather flag became a strength
-					if (profile.isFeather() && profile.getFeatherStrength() == 0)
-					{
-						profile.setFeatherStrength(2);
-						profile.setFeather(false);
-					}
-					// Migration: profiles saved before projectile targets
-					if (profile.getTargetType() == null)
-					{
-						profile.setTargetType(EmitterProfile.TARGET_PLAYER);
-					}
-					// Migration: dynamic lifetime flag became a movement percent
-					if (profile.isDynamicLifetime())
-					{
-						if (profile.getMovementLifetime() == 100)
-						{
-							profile.setMovementLifetime(50);
-						}
-						profile.setDynamicLifetime(false);
-					}
-				});
-			}
+			return gson.fromJson(json, MAP_TYPE);
 		}
 		catch (Exception e)
 		{
-			log.warn("Failed to load emitter profiles", e);
+			log.warn("Failed to parse emitter profiles", e);
+			return null;
 		}
 	}
 
