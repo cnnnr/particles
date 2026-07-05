@@ -680,6 +680,43 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	}
 
 	/**
+	 * Dev-mode sweep for the capture list: live graphics objects and every
+	 * actor's spot anim list. Events alone miss list-borne spot anims (the
+	 * GraphicChanged event tracks only the legacy single-graphic slot) and
+	 * short-lived entries can be evicted before the list is read.
+	 */
+	private void pollGraphicSightings()
+	{
+		for (GraphicsObject graphic : client.getTopLevelWorldView().getGraphicsObjects())
+		{
+			if (!graphic.finished())
+			{
+				noteGraphic(graphic.getId());
+			}
+		}
+		for (Player p : client.getTopLevelWorldView().players())
+		{
+			if (p != null)
+			{
+				for (ActorSpotAnim spotAnim : p.getSpotAnims())
+				{
+					noteGraphic(spotAnim.getId());
+				}
+			}
+		}
+		for (NPC npc : client.getTopLevelWorldView().npcs())
+		{
+			if (npc != null)
+			{
+				for (ActorSpotAnim spotAnim : npc.getSpotAnims())
+				{
+					noteGraphic(spotAnim.getId());
+				}
+			}
+		}
+	}
+
+	/**
 	 * Record a spot anim / graphics ID sighting for the capture list,
 	 * evicting the stalest entry past the cap.
 	 */
@@ -957,6 +994,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (recordTicksLeft > 0)
 		{
 			sampleRecording();
+		}
+		if (developerMode)
+		{
+			pollGraphicSightings();
 		}
 
 		processObjects(dt, level, radiusUnits, localLp);
