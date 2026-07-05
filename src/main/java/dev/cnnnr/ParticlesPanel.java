@@ -54,8 +54,7 @@ class ParticlesPanel extends PluginPanel
 		PROJECTILE("Proj", true),
 		WORLD("World", false),
 		NPC("NPC", true),
-		GRAPHIC("Gfx", true),
-		ANIMATED("Anim", true);
+		GRAPHIC("Gfx", true);
 
 		private final String label;
 		/**
@@ -86,8 +85,6 @@ class ParticlesPanel extends PluginPanel
 					return profile.isNpcTarget();
 				case GRAPHIC:
 					return profile.isGraphicTarget();
-				case ANIMATED:
-					return !profile.getAnimationIds().isEmpty();
 				default:
 					return true;
 			}
