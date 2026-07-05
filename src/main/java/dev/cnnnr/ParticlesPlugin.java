@@ -754,6 +754,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private void noteGraphic(int id, String source)
 	{
+		if (!developerMode)
+		{
+			// The capture list is authoring-only; skip the bookkeeping for
+			// shipped users, who can never open the picker to read it
+			return;
+		}
 		long[] seen = recentGraphics.get(id);
 		if (seen != null)
 		{
@@ -1446,7 +1452,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		for (ActiveEmitter emitter : pe.emitters)
 		{
 			int w = emitter.style.getFeatherStrength();
-			if (w <= 0 || emitter.chains == null || emitter.anchorCount != emitter.vertices.length)
+			// featherReady, not the raw count: interpolation appends extra
+			// anchors so anchorCount exceeds vertices.length when both are on
+			if (w <= 0 || emitter.chains == null || !emitter.featherReady)
 			{
 				continue;
 			}
@@ -2122,6 +2130,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 	private void noteRecentProjectile(int projectileId, long nowMs)
 	{
+		if (!developerMode)
+		{
+			return;
+		}
 		long[] seen = recentProjectiles.get(projectileId);
 		if (seen != null)
 		{
@@ -2896,6 +2908,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		float[] vx = model.getVerticesX();
 		float[] vy = model.getVerticesY();
 		float[] vz = model.getVerticesZ();
+		// The anchors an emitter fills are constant for the whole batch (the
+		// model doesn't move between particles this tick), so refill only
+		// when the randomly picked emitter changes, not per particle
+		ActiveEmitter filled = null;
 		for (int i = 0; i < count; i++)
 		{
 			if (particleSystem.getParticles().size() >= budget)
@@ -2907,12 +2923,20 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				: ge.resolved.get(random.nextInt(ge.resolved.size()));
 			if (feathered && emitter.chains != null)
 			{
-				fillGraphicAnchors(emitter, model, ox, oy, oz, sin, cos, null);
+				if (filled != emitter)
+				{
+					fillGraphicAnchors(emitter, model, ox, oy, oz, sin, cos, null);
+					filled = emitter;
+				}
 				spawnFeatheredStatic(gfxAnchorXs, gfxAnchorYs, gfxAnchorZs, emitter);
 			}
 			else if (interpolated && emitter.chains != null)
 			{
-				fillGraphicAnchors(emitter, model, ox, oy, oz, sin, cos, visible);
+				if (filled != emitter)
+				{
+					fillGraphicAnchors(emitter, model, ox, oy, oz, sin, cos, visible);
+					filled = emitter;
+				}
 				int a = pickVisibleAnchor(emitter.anchorCount);
 				if (a < 0)
 				{
@@ -3526,9 +3550,12 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 			if (model.getVerticesCount() != recordSnapshot.getVertexCount())
 			{
-				// Topology changed mid-recording (gear swap etc.); abort
+				// Topology changed mid-recording (gear swap etc.); abort and
+				// drop the source refs so a despawned object/NPC isn't pinned
 				recordTicksLeft = 0;
 				recordSnapshot = null;
+				recordObject = null;
+				recordNpc = null;
 				recordXs.clear();
 				recordYs.clear();
 				recordZs.clear();
