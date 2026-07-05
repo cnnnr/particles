@@ -213,7 +213,7 @@ class ModelViewerFrame extends JFrame
 	private final JSpinner trailSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 200, 5));
 	private final JSpinner lifetimeSpinner = new JSpinner(new SpinnerNumberModel(2400, 100, 10000, 100));
 	private final JSpinner moveLifetimeSpinner = new JSpinner(new SpinnerNumberModel(100, 10, 100, 5));
-	private final JSpinner riseSpinner = new JSpinner(new SpinnerNumberModel(26, 0, 256, 2));
+	private final JSpinner riseSpinner = new JSpinner(new SpinnerNumberModel(26, -256, 256, 2));
 	private final JSpinner spreadSpinner = new JSpinner(new SpinnerNumberModel(12, 0, 256, 2));
 	private final JSpinner jitterSpinner = new JSpinner(new SpinnerNumberModel(10, 0, 64, 1));
 	private final JSpinner featherSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 8, 1));
@@ -662,6 +662,7 @@ class ModelViewerFrame extends JFrame
 		moveLifetimeSpinner.addChangeListener(e -> saveStyle());
 		moveLifetimeSpinner.setToolTipText("Percent of normal lifetime while the wearer walks or runs. Lower keeps plumes tight at speed instead of smearing a tile behind.");
 		riseSpinner.addChangeListener(e -> saveStyle());
+		riseSpinner.setToolTipText("Vertical drift speed. Positive rises (embers, glow); negative sinks (dripping blood, falling dust).");
 		spreadSpinner.addChangeListener(e -> saveStyle());
 		jitterSpinner.addChangeListener(e -> saveStyle());
 		featherSpinner.addChangeListener(e -> saveStyle());
