@@ -3483,7 +3483,18 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	public void poseAnimation(int animId)
 	{
 		int npcId = viewerNpcId;
-		if (npcId < 0 || animId < 0)
+		if (npcId < 0)
+		{
+			// Player and object meshes cannot be rebuilt from the cache
+			// through the API (worn equipment models are not exposed), so
+			// posing only works on NPC snapshots - say so instead of no-op
+			if (viewerFrame != null)
+			{
+				viewerFrame.showHint("Pose needs an NPC snapshot. For players and objects: Refresh, then perform the animation - it auto-records for the scrubber.");
+			}
+			return;
+		}
+		if (animId < 0)
 		{
 			return;
 		}

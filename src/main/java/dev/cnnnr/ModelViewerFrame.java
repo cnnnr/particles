@@ -454,6 +454,14 @@ class ModelViewerFrame extends JFrame
 	}
 
 	/**
+	 * Show a message in the editor hint line. EDT only.
+	 */
+	void showHint(String text)
+	{
+		editorHint.setText(text);
+	}
+
+	/**
 	 * Jump to the model view; called by the plugin when a graphic capture
 	 * lands. EDT only.
 	 */
