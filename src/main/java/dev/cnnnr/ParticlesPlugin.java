@@ -277,10 +277,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private final Set<Long> npcClaimedTiles = new HashSet<>();
 	/**
-	 * The drawn NPC per stacked tile: among size-1 NPCs at a tile center, the
-	 * engine draws the lowest scene-index one (field-validated with the NPC
-	 * stack oracle). Undrawn stack members are gated out of emission so their
-	 * particles don't double up on the drawn npc. Reused per tick.
+	 * The drawn NPC per stacked tile: among size-1 NPCs at a tile center, our
+	 * current-best rule for which the engine draws (highest scene index; the
+	 * true rule is still being validated with the NPC stack oracle). Undrawn
+	 * stack members are gated out of emission so their particles don't double
+	 * up on the drawn npc. Reused per tick.
 	 */
 	private final Map<Long, NPC> npcTileOwners = new HashMap<>();
 	/**
@@ -950,9 +951,11 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 			long key = ((long) (lp.getX() >> 7) << 32) | ((lp.getY() >> 7) & 0xffffffffL);
 			npcClaimedTiles.add(key);
-			// Field-validated draw winner among stacked NPCs: lowest scene index
+			// Current draw-winner hypothesis among stacked NPCs: highest scene
+			// index (lowest was falsified by the oracle). Still being pinned
+			// down - see updateNpcStackOracle, which scores it live.
 			NPC owner = npcTileOwners.get(key);
-			if (owner == null || npc.getIndex() < owner.getIndex())
+			if (owner == null || npc.getIndex() > owner.getIndex())
 			{
 				npcTileOwners.put(key, npc);
 			}
@@ -1376,20 +1379,26 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 		}
 
-		// Candidate rule scored against the oracle: the lowest scene-index npc
-		// draws (the analog of the players' ascending-index winner)
-		NPC pred = null;
+		// Score several candidate rules at once so the true one shows itself:
+		// lowest / highest scene index, and first / last in the scene's NPC
+		// iteration order (the stack is built in that order). Whichever stays
+		// green across stacks is the rule to wire the gate to.
+		NPC lowestIdx = null;
+		NPC highestIdx = null;
 		for (NPC npc : stack)
 		{
-			if (pred == null || npc.getIndex() < pred.getIndex())
+			if (lowestIdx == null || npc.getIndex() < lowestIdx.getIndex())
 			{
-				pred = npc;
+				lowestIdx = npc;
+			}
+			if (highestIdx == null || npc.getIndex() > highestIdx.getIndex())
+			{
+				highestIdx = npc;
 			}
 		}
-		String predText = (pred == null ? "-" : pred.getName() + "#" + pred.getIndex())
-			+ (!isCentered(winner) ? " n/a-moving"
-			: pred == winner ? " MATCH"
-			: " MISS");
+		NPC firstIter = stack.isEmpty() ? null : stack.get(0);
+		NPC lastIter = stack.isEmpty() ? null : stack.get(stack.size() - 1);
+		boolean scoreable = isCentered(winner);
 
 		// Does the scene-wide index (getIndex) agree with the menu identifier?
 		// A mismatch would mean getIndex is the wrong source for the rule
@@ -1403,22 +1412,31 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			}
 		}
 
+		int winnerIter = stack.indexOf(winner);
 		npcOracleLine = "npc stack " + stack.size()
-			+ " | drawn " + winner.getName() + "#" + winner.getIndex()
-			+ (isCentered(winner) ? "" : " (moving)")
-			+ " | pred " + predText
+			+ " drawn " + winner.getName() + "#" + winner.getIndex() + "(it" + winnerIter + ")"
+			+ (scoreable ? "" : " moving")
+			+ " | loIdx" + predMark(lowestIdx, winner, scoreable)
+			+ " | hiIdx" + predMark(highestIdx, winner, scoreable)
+			+ " | 1st" + predMark(firstIter, winner, scoreable)
+			+ " | last" + predMark(lastIter, winner, scoreable)
 			+ " | idxSrc " + (idxOk ? "ok" : "MISMATCH");
 
 		// One dump per distinct situation, with everything a rule could depend
-		// on: scene index, type id, menu identifier, exact position
+		// on: iteration position, scene index, type id, menu identifier, pos
 		StringBuilder dump = new StringBuilder("npc stack oracle: drawn=")
 			.append(winner.getName()).append('#').append(winner.getIndex())
-			.append(" pred=").append(predText)
-			.append(" idxOk=").append(idxOk);
-		for (NPC npc : stack)
+			.append("(it").append(winnerIter).append(')')
+			.append(" loIdx").append(predMark(lowestIdx, winner, scoreable))
+			.append(" hiIdx").append(predMark(highestIdx, winner, scoreable))
+			.append(" 1st").append(predMark(firstIter, winner, scoreable))
+			.append(" last").append(predMark(lastIter, winner, scoreable))
+			.append(" idxSrc=").append(idxOk ? "ok" : "MISMATCH");
+		for (int i = 0; i < stack.size(); i++)
 		{
+			NPC npc = stack.get(i);
 			LocalPoint lp = npc.getLocalLocation();
-			dump.append(" | ").append(npc.getName())
+			dump.append(" | it").append(i).append(' ').append(npc.getName())
 				.append('#').append(npc.getIndex())
 				.append("/id").append(npc.getId())
 				.append("/menu").append(menuIndices.getOrDefault(npc, -1))
@@ -1430,6 +1448,19 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			lastNpcOracleDump = text;
 			log.debug(text);
 		}
+	}
+
+	/**
+	 * One candidate predictor's result against the oracle winner: its index
+	 * plus Y (match), n (miss), or ? (winner is a mover, not scoreable).
+	 */
+	private static String predMark(NPC pred, NPC winner, boolean scoreable)
+	{
+		if (pred == null)
+		{
+			return "-";
+		}
+		return "#" + pred.getIndex() + (!scoreable ? " ?" : pred == winner ? " Y" : " n");
 	}
 
 	private static boolean isVanillaNpcOption(MenuAction action)
