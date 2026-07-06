@@ -894,43 +894,40 @@ class ParticleRenderer
 
 	private static float maskValue(Shape shape, float nx, float ny, float t)
 	{
-		switch (shape)
+		if (shape == Shape.STAR || shape == Shape.DIAMOND)
 		{
-			case RING:
-			{
-				// Hollow center and rim, bright annulus at ~0.62 radius. Ring
-				// stays a mask - geometry can't punch a hole in a filled disc
-				float d = (t - 0.62f) / 0.34f;
-				float a = Math.max(0f, 1f - d * d);
-				return a * a;
-			}
-			case STAR:
-			case TEARDROP:
-			case CROSS:
-				// Geometry carries the silhouette; keep the interior a soft
-				// glow (bright core, dimmer arms) that never fully vanishes so
-				// the warped points stay visible
-				return 0.35f + 0.65f * (1f - t * t);
-			default:
-			{
-				float a = 1f - t * t;
-				return a * a;
-			}
+			// Geometry carries the silhouette; keep the interior a soft glow
+			// (bright core, dimmer arms) that never fully vanishes so the
+			// warped points stay visible
+			return 0.35f + 0.65f * (1f - t * t);
 		}
+		float a = 1f - t * t;
+		return a * a;
 	}
 
 	/**
 	 * Reposition the flattened disc's vertices to trace a shape's silhouette
-	 * (star, teardrop, cross). Radial scaling by angle keeps topology intact
-	 * so the batch canvas is unaffected; Default and Ring are left round and
-	 * carved by the alpha mask instead. x is horizontal, y vertical (+y up).
+	 * by scaling each vertex's radius by a function of its angle - a diamond
+	 * is four points on the axes, a star is eight (two diamonds crossed).
+	 * Topology is unchanged so the batch canvas is unaffected; Default is left
+	 * round. x is horizontal, y vertical.
 	 */
 	private static void shapeWarp(ModelData model, float radius, Shape shape)
 	{
-		if (shape == Shape.DEFAULT || shape == Shape.RING || radius <= 0)
+		int points;
+		if (shape == Shape.DIAMOND)
+		{
+			points = 4;
+		}
+		else if (shape == Shape.STAR)
+		{
+			points = 8;
+		}
+		else
 		{
 			return;
 		}
+
 		float[] xs = model.getVerticesX();
 		float[] ys = model.getVerticesY();
 		int count = model.getVerticesCount();
@@ -938,42 +935,15 @@ class ParticleRenderer
 		{
 			float x = xs[i];
 			float y = ys[i];
-			float r = (float) Math.sqrt(x * x + y * y);
-			if (r < 0.001f)
+			if (x * x + y * y < 0.000001f)
 			{
 				continue;
 			}
-			switch (shape)
-			{
-				case STAR:
-				{
-					// Five points: pull the radius in between the peak angles
-					float p = 0.5f + 0.5f * (float) Math.cos(5.0 * Math.atan2(y, x));
-					float f = 0.4f + 0.6f * p;
-					xs[i] = x * f;
-					ys[i] = y * f;
-					break;
-				}
-				case CROSS:
-				{
-					// Four arms on the axes (a plus): peaks at 0/90/180/270
-					float p = 0.5f + 0.5f * (float) Math.cos(4.0 * Math.atan2(y, x));
-					float f = 0.3f + 0.7f * p * p;
-					xs[i] = x * f;
-					ys[i] = y * f;
-					break;
-				}
-				case TEARDROP:
-				{
-					// Round bottom, top narrowed to a point (+y up)
-					float ny = y / radius;
-					float f = ny > 0 ? (float) Math.pow(1f - Math.min(1f, ny), 0.7) : 1f;
-					xs[i] = x * f;
-					break;
-				}
-				default:
-					break;
-			}
+			// Peaks at every 360/points degrees; square sharpens the points
+			float p = 0.5f + 0.5f * (float) Math.cos(points * Math.atan2(y, x));
+			float f = 0.3f + 0.7f * p * p;
+			xs[i] = x * f;
+			ys[i] = y * f;
 		}
 	}
 }

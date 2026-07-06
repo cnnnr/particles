@@ -1,18 +1,17 @@
 package dev.cnnnr;
 
 /**
- * Particle silhouette, realized as a per-face alpha falloff over the shared
- * billboard disc geometry - not a different mesh, so the batch canvas keeps
- * its uniform topology. Every shape stays soft and glowy; the alpha mask just
- * carves the outline.
+ * Particle silhouette. Default is the soft round glow; Star and Diamond warp
+ * the shared billboard disc's vertices into their outline (an eight-point
+ * star is two diamonds crossed at the center, a diamond is four points on the
+ * axes). Warping keeps the mesh topology intact, so the batch canvas is
+ * unaffected.
  */
 enum Shape
 {
 	DEFAULT("Default"),
-	RING("Ring"),
 	STAR("Star"),
-	TEARDROP("Teardrop"),
-	CROSS("Cross");
+	DIAMOND("Diamond");
 
 	private final String label;
 
