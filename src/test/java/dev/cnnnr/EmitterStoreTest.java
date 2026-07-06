@@ -31,7 +31,16 @@ public class EmitterStoreTest
 
 	private String firstBundledKey()
 	{
-		return store(false).mergeWithBundle(null).keySet().iterator().next();
+		// An ungrouped preset: only these carry the user's toggle across a merge
+		// (foldered children take the bundle's toggle, tested separately).
+		for (Map.Entry<String, EmitterProfile> entry : store(false).mergeWithBundle(null).entrySet())
+		{
+			if (entry.getValue().getFolderId() == null)
+			{
+				return entry.getKey();
+			}
+		}
+		throw new IllegalStateException("no ungrouped bundled preset");
 	}
 
 	@Test
@@ -102,43 +111,73 @@ public class EmitterStoreTest
 			+ enabled + ",\"wip\":false}";
 	}
 
+	// Test-only ids that cannot collide with real bundled profiles/folders,
+	// so these exercise the reconcile logic in isolation from the pack.
+	private static final String G = "test-grp";
+
 	@Test
 	public void folderWithTwoMembersSurvives()
 	{
 		EmitterStore.Snapshot snap = store(false).mergeAll(
-			"{" + profileIn("a", "folder:1") + "," + profileIn("b", "folder:1") + "}",
-			"{" + folder("folder:1", true) + "}");
-		assertTrue("two-member folder survives", snap.folders.containsKey("folder:1"));
-		assertEquals("folder:1", snap.profiles.get("a").getFolderId());
-		assertEquals("folder:1", snap.profiles.get("b").getFolderId());
+			"{" + profileIn("test-a", G) + "," + profileIn("test-b", G) + "}",
+			"{" + folder(G, true) + "}");
+		assertTrue("two-member folder survives", snap.folders.containsKey(G));
+		assertEquals(G, snap.profiles.get("test-a").getFolderId());
+		assertEquals(G, snap.profiles.get("test-b").getFolderId());
 	}
 
 	@Test
 	public void loneMemberFolderIsPruned()
 	{
 		EmitterStore.Snapshot snap = store(false).mergeAll(
-			"{" + profileIn("a", "folder:1") + "}",
-			"{" + folder("folder:1", true) + "}");
-		assertFalse("folder below two members is dropped", snap.folders.containsKey("folder:1"));
-		assertNull("orphaned member's folderId is nulled", snap.profiles.get("a").getFolderId());
+			"{" + profileIn("test-a", G) + "}",
+			"{" + folder(G, true) + "}");
+		assertFalse("folder below two members is dropped", snap.folders.containsKey(G));
+		assertNull("orphaned member's folderId is nulled", snap.profiles.get("test-a").getFolderId());
 	}
 
 	@Test
 	public void danglingFolderIdIsNulled()
 	{
 		EmitterStore.Snapshot snap = store(false).mergeAll(
-			"{" + profileIn("a", "folder:ghost") + "," + profileIn("b", "folder:ghost") + "}", null);
-		assertNull(snap.profiles.get("a").getFolderId());
-		assertNull(snap.profiles.get("b").getFolderId());
+			"{" + profileIn("test-a", "test-ghost") + "," + profileIn("test-b", "test-ghost") + "}", null);
+		assertNull(snap.profiles.get("test-a").getFolderId());
+		assertNull(snap.profiles.get("test-b").getFolderId());
 	}
 
 	@Test
 	public void developerModeKeepsSavedFolders()
 	{
 		EmitterStore.Snapshot snap = store(true).mergeAll(
-			"{" + profileIn("a", "folder:1") + "," + profileIn("b", "folder:1") + "}",
-			"{" + folder("folder:1", false) + "}");
-		assertTrue(snap.folders.containsKey("folder:1"));
-		assertFalse("dev config folder toggle is preserved", snap.folders.get("folder:1").isEnabled());
+			"{" + profileIn("test-a", G) + "," + profileIn("test-b", G) + "}",
+			"{" + folder(G, false) + "}");
+		assertTrue(snap.folders.containsKey(G));
+		assertFalse("dev config folder toggle is preserved", snap.folders.get(G).isEnabled());
+	}
+
+	@Test
+	public void shippedFolderedChildTakesBundleToggle()
+	{
+		// A bundled profile that ships inside a folder: users toggle the folder,
+		// not the child, so the bundle's enabled wins over any saved child toggle.
+		Map<String, EmitterProfile> bundled = store(false).mergeWithBundle(null);
+		String folderedKey = null;
+		for (Map.Entry<String, EmitterProfile> entry : bundled.entrySet())
+		{
+			if (entry.getValue().getFolderId() != null)
+			{
+				folderedKey = entry.getKey();
+				break;
+			}
+		}
+		if (folderedKey == null)
+		{
+			return; // no foldered presets shipped yet - nothing to assert
+		}
+		boolean bundleEnabled = bundled.get(folderedKey).isEnabled();
+		Map<String, EmitterProfile> all =
+			store(false).mergeWithBundle(savedWithKey(folderedKey, !bundleEnabled, "x"));
+		assertEquals("foldered child ignores the user's toggle", bundleEnabled,
+			all.get(folderedKey).isEnabled());
 	}
 }
