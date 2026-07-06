@@ -282,8 +282,9 @@ class ParticleRenderer
 				lens.recolor(original, target);
 			}
 
-			// Radial alpha falloff per face - the "texture" of the sprite
-			float[] radial = radialFalloff(lens, radius);
+			// Per-face alpha mask carving the profile's shape - the "texture"
+			Shape shape = profile.getShape() == null ? Shape.DEFAULT : profile.getShape();
+			float[] radial = shapeFalloff(lens, radius, shape);
 
 			for (int i = 0; i < ParticleStyle.FADE_STEPS; i++)
 			{
@@ -860,11 +861,12 @@ class ParticleRenderer
 	}
 
 	/**
-	 * Per-face alpha multiplier by distance of the face centroid from the disc
-	 * center: (1 - t^2)^2 falloff, opaque core to transparent rim. This is the
-	 * radial alpha mask a particle texture would normally provide.
+	 * Per-face alpha multiplier realizing the profile's shape as a soft mask
+	 * over the disc, evaluated at each face centroid in the disc plane (x
+	 * horizontal, y vertical). Default is the (1 - t^2)^2 radial glow; the
+	 * others carve a silhouette while staying soft. Baked once per style.
 	 */
-	private static float[] radialFalloff(ModelData model, float radius)
+	private static float[] shapeFalloff(ModelData model, float radius, Shape shape)
 	{
 		float[] xs = model.getVerticesX();
 		float[] ys = model.getVerticesY();
@@ -877,10 +879,56 @@ class ParticleRenderer
 		{
 			float cx = (xs[f1[f]] + xs[f2[f]] + xs[f3[f]]) / 3f;
 			float cy = (ys[f1[f]] + ys[f2[f]] + ys[f3[f]]) / 3f;
-			float t = Math.min(1f, (float) Math.sqrt(cx * cx + cy * cy) / radius);
-			float a = 1f - t * t;
-			falloff[f] = a * a;
+			float nx = cx / radius;
+			float ny = cy / radius;
+			float t = Math.min(1f, (float) Math.sqrt(nx * nx + ny * ny));
+			falloff[f] = maskValue(shape, nx, ny, t);
 		}
 		return falloff;
+	}
+
+	private static float maskValue(Shape shape, float nx, float ny, float t)
+	{
+		switch (shape)
+		{
+			case RING:
+			{
+				// Bright annulus at ~0.62 radius, hollow center and rim
+				float d = (t - 0.62f) / 0.34f;
+				float a = Math.max(0f, 1f - d * d);
+				return a * a;
+			}
+			case STAR:
+			{
+				// Five soft points: extend the effective radius toward the
+				// point directions so arms reach the rim, valleys fall short
+				float ang = 0.5f + 0.5f * (float) Math.cos(5.0 * Math.atan2(ny, nx));
+				float m = 0.42f + 0.58f * ang * ang;
+				float te = Math.min(1f, t / m);
+				float a = 1f - te * te;
+				return a * a;
+			}
+			case TEARDROP:
+			{
+				// Round bottom pinched to a point at the top (+y up)
+				float k = ny > 0 ? ny : 0f;
+				float horiz = nx / (1f - 0.85f * k);
+				float td = (float) Math.sqrt(horiz * horiz + ny * ny);
+				float a = Math.max(0f, 1f - td * td);
+				return a * a;
+			}
+			case CROSS:
+			{
+				// Two soft perpendicular bars fading to the rim
+				float bx = Math.max(0f, 1f - ny * ny / 0.16f) * Math.max(0f, 1f - nx * nx);
+				float by = Math.max(0f, 1f - nx * nx / 0.16f) * Math.max(0f, 1f - ny * ny);
+				return Math.max(bx, by);
+			}
+			default:
+			{
+				float a = 1f - t * t;
+				return a * a;
+			}
+		}
 	}
 }

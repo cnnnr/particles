@@ -84,10 +84,16 @@ class EmitterProfile
 	 */
 	private int color = 0x96FF981F;
 	/**
+	 * Particle silhouette, baked as a per-face alpha mask over the shared
+	 * disc geometry. Null on profiles saved before shapes existed, migrated
+	 * to DEFAULT on load.
+	 */
+	private Shape shape = Shape.DEFAULT;
+	/**
 	 * Particle diameter in local units (a tile is 128).
 	 */
 	private int size = 6;
-	private int particlesPerSecond = 60;
+	private int particlesPerSecond = 24;
 	/**
 	 * Particles per tile of emitter movement, spread evenly along each
 	 * anchor's path since the last tick. Spatially uniform emission for
@@ -201,6 +207,7 @@ class EmitterProfile
 	void copyStyleFrom(EmitterProfile other)
 	{
 		color = other.color;
+		shape = other.shape;
 		size = other.size;
 		particlesPerSecond = other.particlesPerSecond;
 		trailDensity = other.trailDensity;

@@ -161,6 +161,11 @@ class EmitterStore
 				}
 				profile.setDynamicLifetime(false);
 			}
+			// Migration: profiles saved before shapes have no shape
+			if (profile.getShape() == null)
+			{
+				profile.setShape(Shape.DEFAULT);
+			}
 		});
 		return result;
 	}

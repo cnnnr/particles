@@ -207,7 +207,8 @@ class ModelViewerFrame extends JFrame
 
 	// Style editor controls
 	private final JButton colorButton = new JButton();
-	private final JSpinner alphaSpinner = new JSpinner(new SpinnerNumberModel(150, 0, 255, 5));
+	private final JComboBox<Shape> shapeCombo = new JComboBox<>(Shape.values());
+	private final JSpinner alphaSpinner = new JSpinner(new SpinnerNumberModel(128, 0, 255, 5));
 	private final JSpinner sizeSpinner = new JSpinner(new SpinnerNumberModel(12, 2, 64, 1));
 	private final JSpinner rateSpinner = new JSpinner(new SpinnerNumberModel(80, 0, 1000, 5));
 	private final JSpinner trailSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 200, 5));
@@ -601,6 +602,8 @@ class ModelViewerFrame extends JFrame
 		JPanel grid = new JPanel(new GridLayout(0, 2, 4, 4));
 		grid.add(new JLabel("Color"));
 		grid.add(colorButton);
+		grid.add(new JLabel("Shape"));
+		grid.add(shapeCombo);
 		grid.add(new JLabel("Opacity"));
 		grid.add(alphaSpinner);
 		grid.add(new JLabel("Size"));
@@ -653,6 +656,8 @@ class ModelViewerFrame extends JFrame
 				saveStyle();
 			}
 		});
+		shapeCombo.addActionListener(e -> saveStyle());
+		shapeCombo.setToolTipText("Particle silhouette: a soft glow (Default) or a carved shape - ring, star, teardrop, cross. Reads best at larger sizes.");
 		alphaSpinner.addChangeListener(e -> saveStyle());
 		sizeSpinner.addChangeListener(e -> saveStyle());
 		rateSpinner.addChangeListener(e -> saveStyle());
@@ -819,6 +824,7 @@ class ModelViewerFrame extends JFrame
 		populating = true;
 		Color color = new Color(profile.getColor(), true);
 		colorButton.setBackground(new Color(color.getRed(), color.getGreen(), color.getBlue()));
+		shapeCombo.setSelectedItem(profile.getShape() == null ? Shape.DEFAULT : profile.getShape());
 		alphaSpinner.setValue(color.getAlpha());
 		sizeSpinner.setValue(profile.getSize());
 		rateSpinner.setValue(profile.getParticlesPerSecond());
@@ -881,6 +887,7 @@ class ModelViewerFrame extends JFrame
 	private void setEditorEnabled(boolean enabled)
 	{
 		colorButton.setEnabled(enabled);
+		shapeCombo.setEnabled(enabled);
 		alphaSpinner.setEnabled(enabled);
 		sizeSpinner.setEnabled(enabled);
 		rateSpinner.setEnabled(enabled);
@@ -921,6 +928,7 @@ class ModelViewerFrame extends JFrame
 		int argb = ((int) alphaSpinner.getValue() & 0xff) << 24
 			| (rgb.getRed() << 16) | (rgb.getGreen() << 8) | rgb.getBlue();
 		profile.setColor(argb);
+		profile.setShape((Shape) shapeCombo.getSelectedItem());
 		profile.setSize((int) sizeSpinner.getValue());
 		profile.setParticlesPerSecond((int) rateSpinner.getValue());
 		profile.setTrailDensity((int) trailSpinner.getValue());
