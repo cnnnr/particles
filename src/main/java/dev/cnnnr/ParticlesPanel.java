@@ -340,7 +340,13 @@ class ParticlesPanel extends PluginPanel
 
 		if (!entries.isEmpty())
 		{
-			JLabel header = new JLabel(entries.size() + (entries.size() == 1 ? " profile" : " profiles"));
+			String count = entries.size() + (entries.size() == 1 ? " profile" : " profiles");
+			// Remind the developer the tab they are viewing ships hidden
+			if (developerMode && category.wip)
+			{
+				count += " (WIP category)";
+			}
+			JLabel header = new JLabel(count);
 			header.setAlignmentX(Component.LEFT_ALIGNMENT);
 			profileList.add(header);
 			profileList.add(Box.createVerticalStrut(6));
