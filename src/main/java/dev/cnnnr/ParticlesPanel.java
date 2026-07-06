@@ -568,7 +568,12 @@ class ParticlesPanel extends PluginPanel
 			items.add(Item.folder(folder));
 		}
 
-		items.sort(Comparator.comparing(item -> item.name == null ? "" : item.name.toLowerCase()));
+		Comparator<Item> byName = Comparator.comparing(item -> item.name == null ? "" : item.name.toLowerCase());
+		// Developers author folders, so group them ahead of loose profiles;
+		// end users see identical rows, so keep them interleaved alphabetically
+		items.sort(developerMode
+			? Comparator.<Item>comparingInt(item -> item.folder ? 0 : 1).thenComparing(byName)
+			: byName);
 
 		if (!items.isEmpty())
 		{
