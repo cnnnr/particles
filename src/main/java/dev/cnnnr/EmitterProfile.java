@@ -111,6 +111,18 @@ class EmitterProfile
 	 */
 	private int spreadSpeed = 6;
 	/**
+	 * Downward acceleration in local units per second squared; 0 = constant
+	 * velocity. Turns drift into falling: drops start slow and speed up, the
+	 * signature of a blood or water drip.
+	 */
+	private int gravity = 0;
+	/**
+	 * Elongate the particle this percent along its screen-projected velocity
+	 * (0 = round). Makes fast drops read as falling streaks. Auto-capped so
+	 * the stretched billboard stays inside the render bounds.
+	 */
+	private int stretch = 0;
+	/**
 	 * Random spawn offset around the emitter vertex in local units.
 	 */
 	private int spawnJitter = 6;
@@ -214,6 +226,8 @@ class EmitterProfile
 		lifetimeMs = other.lifetimeMs;
 		riseSpeed = other.riseSpeed;
 		spreadSpeed = other.spreadSpeed;
+		gravity = other.gravity;
+		stretch = other.stretch;
 		spawnJitter = other.spawnJitter;
 		featherStrength = other.featherStrength;
 		interpolation = other.interpolation;

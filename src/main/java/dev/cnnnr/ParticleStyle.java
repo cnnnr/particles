@@ -39,6 +39,21 @@ class ParticleStyle
 	private final float trailDensity;
 	private final float riseSpeed;
 	private final float spreadSpeed;
+	/**
+	 * Downward acceleration in local units per second squared; see
+	 * EmitterProfile.
+	 */
+	private final float gravity;
+	/**
+	 * Billboard elongation factor along screen velocity (1 = round); see
+	 * EmitterProfile.
+	 */
+	private final float stretchFactor;
+	/**
+	 * The profile's base diameter; the renderer needs it to cap the stretch
+	 * so an elongated billboard stays inside the batch bounds volume.
+	 */
+	private final int baseSize;
 	private final float spawnJitter;
 	private final int featherStrength;
 	/**
@@ -81,6 +96,9 @@ class ParticleStyle
 		this.trailDensity = profile.getTrailDensity();
 		this.riseSpeed = profile.getRiseSpeed();
 		this.spreadSpeed = profile.getSpreadSpeed();
+		this.gravity = profile.getGravity();
+		this.stretchFactor = 1f + Math.max(0, profile.getStretch()) / 100f;
+		this.baseSize = profile.getSize();
 		this.spawnJitter = profile.getSpawnJitter();
 		this.featherStrength = profile.getFeatherStrength();
 		this.interpolation = Math.max(0, Math.min(4, profile.getInterpolation()));

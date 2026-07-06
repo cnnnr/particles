@@ -577,6 +577,38 @@ class ParticleRenderer
 		dy = clamp(dy, VOLUME_UP + CLAMP_MARGIN, VOLUME_DOWN - CLAMP_MARGIN);
 		dz = clamp(dz, -VOLUME_HORIZONTAL + CLAMP_MARGIN, VOLUME_HORIZONTAL - CLAMP_MARGIN);
 
+		// Velocity-aligned stretch: elongate the disc along the particle's
+		// screen-projected velocity (drips read as falling streaks). Capped
+		// so the stretched radius stays within CLAMP_MARGIN and thus in the
+		// bounds volume. du/dv is the velocity's direction in the billboard's
+		// local (x,y) plane; the model frame is X=east, Y=height, Z=north.
+		float stretch = style.getStretchFactor();
+		float du = 0f;
+		float dv = 0f;
+		if (stretch > 1f)
+		{
+			float discRadius = style.getBaseSize() * 0.5f * ParticleStyle.SIZE_MULTIPLIERS[size];
+			if (discRadius > 1f)
+			{
+				stretch = Math.min(stretch, Math.max(1f, (CLAMP_MARGIN - 1f) / discRadius));
+			}
+			if (stretch > 1f)
+			{
+				float vE = p.getVelX();
+				float vH = p.getVelZ();
+				float vN = p.getVelY();
+				float u = vE * cosYaw + vN * sinYaw;
+				float v = vE * sinPitch * sinYaw + vH * cosPitch - vN * sinPitch * cosYaw;
+				float mag = (float) Math.sqrt(u * u + v * v);
+				if (mag > 0.001f)
+				{
+					du = u / mag;
+					dv = v / mag;
+				}
+			}
+		}
+		boolean stretched = stretch > 1f && (du != 0f || dv != 0f);
+
 		ModelData sizeTemplate = style.getTemplates()[size][0];
 		float[] sx = sizeTemplate.getVerticesX();
 		float[] sy = sizeTemplate.getVerticesY();
@@ -586,6 +618,15 @@ class ParticleRenderer
 			float x = sx[j];
 			float y = sy[j];
 			float z = sz[j];
+
+			if (stretched)
+			{
+				// Scale the component along the velocity direction, leaving
+				// the perpendicular unchanged - an elongated streak
+				float along = (stretch - 1f) * (x * du + y * dv);
+				x += along * du;
+				y += along * dv;
+			}
 
 			// Pitch: (0,0,1) -> (0, sinPitch, cosPitch)
 			float y1 = y * cosPitch + z * sinPitch;

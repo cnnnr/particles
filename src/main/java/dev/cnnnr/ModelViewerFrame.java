@@ -216,6 +216,8 @@ class ModelViewerFrame extends JFrame
 	private final JSpinner moveLifetimeSpinner = new JSpinner(new SpinnerNumberModel(100, 10, 100, 5));
 	private final JSpinner riseSpinner = new JSpinner(new SpinnerNumberModel(26, -256, 256, 2));
 	private final JSpinner spreadSpinner = new JSpinner(new SpinnerNumberModel(12, 0, 256, 2));
+	private final JSpinner gravitySpinner = new JSpinner(new SpinnerNumberModel(0, 0, 512, 8));
+	private final JSpinner stretchSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 300, 10));
 	private final JSpinner jitterSpinner = new JSpinner(new SpinnerNumberModel(10, 0, 64, 1));
 	private final JSpinner featherSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 8, 1));
 	private final JSpinner interpolationSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 4, 1));
@@ -620,6 +622,10 @@ class ModelViewerFrame extends JFrame
 		grid.add(riseSpinner);
 		grid.add(new JLabel("Spread"));
 		grid.add(spreadSpinner);
+		grid.add(new JLabel("Gravity"));
+		grid.add(gravitySpinner);
+		grid.add(new JLabel("Stretch %"));
+		grid.add(stretchSpinner);
 		grid.add(new JLabel("Jitter"));
 		grid.add(jitterSpinner);
 		grid.add(new JLabel("Feather"));
@@ -669,6 +675,10 @@ class ModelViewerFrame extends JFrame
 		riseSpinner.addChangeListener(e -> saveStyle());
 		riseSpinner.setToolTipText("Vertical drift speed. Positive rises (embers, glow); negative sinks (dripping blood, falling dust).");
 		spreadSpinner.addChangeListener(e -> saveStyle());
+		gravitySpinner.addChangeListener(e -> saveStyle());
+		gravitySpinner.setToolTipText("Downward acceleration. 0 = constant velocity; higher makes particles fall and speed up - the signature of a blood or water drip. Pair with Rise near 0.");
+		stretchSpinner.addChangeListener(e -> saveStyle());
+		stretchSpinner.setToolTipText("Elongate the particle this percent along its motion, so fast drops read as falling streaks. 0 = round. Auto-capped on large sizes.");
 		jitterSpinner.addChangeListener(e -> saveStyle());
 		featherSpinner.addChangeListener(e -> saveStyle());
 		featherSpinner.setToolTipText("Emit along a line chained through the emitter vertices, smoothed over this many neighbors (0 = off). Higher values cut across jagged notches; the marker overlay draws the resulting line.");
@@ -833,6 +843,8 @@ class ModelViewerFrame extends JFrame
 		moveLifetimeSpinner.setValue(profile.getMovementLifetime());
 		riseSpinner.setValue(profile.getRiseSpeed());
 		spreadSpinner.setValue(profile.getSpreadSpeed());
+		gravitySpinner.setValue(profile.getGravity());
+		stretchSpinner.setValue(profile.getStretch());
 		jitterSpinner.setValue(profile.getSpawnJitter());
 		featherSpinner.setValue(profile.getFeatherStrength());
 		interpolationSpinner.setValue(profile.getInterpolation());
@@ -896,6 +908,8 @@ class ModelViewerFrame extends JFrame
 		moveLifetimeSpinner.setEnabled(enabled);
 		riseSpinner.setEnabled(enabled);
 		spreadSpinner.setEnabled(enabled);
+		gravitySpinner.setEnabled(enabled);
+		stretchSpinner.setEnabled(enabled);
 		jitterSpinner.setEnabled(enabled);
 		featherSpinner.setEnabled(enabled);
 		interpolationSpinner.setEnabled(enabled);
@@ -936,6 +950,8 @@ class ModelViewerFrame extends JFrame
 		profile.setMovementLifetime((int) moveLifetimeSpinner.getValue());
 		profile.setRiseSpeed((int) riseSpinner.getValue());
 		profile.setSpreadSpeed((int) spreadSpinner.getValue());
+		profile.setGravity((int) gravitySpinner.getValue());
+		profile.setStretch((int) stretchSpinner.getValue());
 		profile.setSpawnJitter((int) jitterSpinner.getValue());
 		profile.setFeatherStrength((int) featherSpinner.getValue());
 		profile.setInterpolation((int) interpolationSpinner.getValue());

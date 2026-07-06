@@ -21,8 +21,11 @@ class Particle
 	@Getter
 	private float z;
 
+	@Getter
 	private float velX;
+	@Getter
 	private float velY;
+	@Getter
 	private float velZ;
 	private float lifetime;
 	// Sinusoidal drift so motion meanders instead of travelling straight
@@ -65,6 +68,9 @@ class Particle
 	void update(float dt)
 	{
 		age += dt;
+		// Gravity: downward acceleration on the vertical velocity (scene z is
+		// negative-up, so falling means an increasing z). Constant when 0.
+		velZ += style.getGravity() * dt;
 		float t = age * wobbleFreq + wobblePhase;
 		x += (velX + (float) Math.sin(t) * wobbleAmp) * dt;
 		y += (velY + (float) Math.cos(t * 1.3f) * wobbleAmp) * dt;
