@@ -12,12 +12,14 @@ import java.util.Objects;
 import java.util.Set;
 import javax.annotation.Nullable;
 import javax.swing.BorderFactory;
+import javax.swing.BoxLayout;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JColorChooser;
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JList;
@@ -29,6 +31,7 @@ import javax.swing.JSplitPane;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.SpinnerNumberModel;
+import javax.swing.SwingConstants;
 import javax.swing.WindowConstants;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -208,9 +211,12 @@ class ModelViewerFrame extends JFrame
 
 	// Style editor controls
 	private final JButton colorButton = new JButton();
-	private final JCheckBox colorFadeCheck = new JCheckBox("Fade to end color");
+	private final JCheckBox colorFadeCheck = new JCheckBox();
 	private final JButton endColorButton = new JButton();
 	private final JSpinner fadeStartSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 100, 5));
+	// Rows hidden while colour-over-life is off, to declutter the common case
+	private JComponent endColorRow;
+	private JComponent fadeStartRow;
 	private final JComboBox<Shape> shapeCombo = new JComboBox<>(Shape.values());
 	private final JSpinner alphaSpinner = new JSpinner(new SpinnerNumberModel(128, 0, 255, 4));
 	private final JSpinner sizeSpinner = new JSpinner(new SpinnerNumberModel(12, 2, 64, 1));
@@ -613,73 +619,58 @@ class ModelViewerFrame extends JFrame
 
 	private JPanel buildStyleEditor()
 	{
-		JPanel grid = new JPanel(new GridLayout(0, 2, 4, 4));
-		grid.add(new JLabel("Color"));
-		grid.add(colorButton);
-		grid.add(new JLabel("Color over life"));
-		grid.add(colorFadeCheck);
-		grid.add(new JLabel("End color"));
-		grid.add(endColorButton);
-		grid.add(new JLabel("Fade start %"));
-		grid.add(fadeStartSpinner);
-		grid.add(new JLabel("Shape"));
-		grid.add(shapeCombo);
-		grid.add(new JLabel("Opacity"));
-		grid.add(alphaSpinner);
-		grid.add(new JLabel("Size"));
-		grid.add(sizeSpinner);
-		grid.add(new JLabel("Size jitter"));
-		grid.add(sizeJitterSpinner);
-		grid.add(new JLabel("Rate /s"));
-		grid.add(rateSpinner);
-		grid.add(new JLabel("Trail / tile"));
-		grid.add(trailSpinner);
-		grid.add(new JLabel("Lifetime ms"));
-		grid.add(lifetimeSpinner);
-		grid.add(new JLabel("Moving life %"));
-		grid.add(moveLifetimeSpinner);
-		grid.add(new JLabel("Rise"));
-		grid.add(riseSpinner);
-		grid.add(new JLabel("Spread"));
-		grid.add(spreadSpinner);
-		grid.add(new JLabel("Gravity"));
-		grid.add(gravitySpinner);
-		grid.add(new JLabel("Wind X"));
-		grid.add(windXSpinner);
-		grid.add(new JLabel("Wind Y"));
-		grid.add(windYSpinner);
-		grid.add(new JLabel("Wind Z"));
-		grid.add(windZSpinner);
-		grid.add(new JLabel("Drag"));
-		grid.add(dragSpinner);
-		grid.add(new JLabel("Vortex"));
-		grid.add(vortexSpinner);
-		grid.add(new JLabel("Emit scale %"));
-		grid.add(emitScaleSpinner);
-		grid.add(new JLabel("Stretch %"));
-		grid.add(stretchSpinner);
-		grid.add(new JLabel("Stretch ramp"));
-		grid.add(stretchRampSpinner);
-		grid.add(new JLabel("Jitter"));
-		grid.add(jitterSpinner);
-		grid.add(new JLabel("Feather"));
-		grid.add(featherSpinner);
-		grid.add(new JLabel("Interpolate"));
-		grid.add(interpolationSpinner);
-		grid.add(new JLabel("Depth bias"));
-		grid.add(depthBiasSpinner);
-		grid.add(new JLabel("Offset X"));
-		grid.add(offsetXSpinner);
-		grid.add(new JLabel("Offset Y"));
-		grid.add(offsetYSpinner);
-		grid.add(new JLabel("Offset Z (up)"));
-		grid.add(offsetZSpinner);
-		grid.add(new JLabel("Item filter"));
-		grid.add(itemFilterField);
-		grid.add(new JLabel("Anim filter"));
-		grid.add(animFilterField);
-		grid.add(new JLabel("Anim frames"));
-		grid.add(animFramesField);
+		// Fields are grouped into collapsible sections to tame the long list;
+		// vector fields (Wind, Offset) share a single row of three spinners.
+		offsetXSpinner.setToolTipText("Fixed emit offset sideways (local X), rotates with facing.");
+		offsetYSpinner.setToolTipText("Fixed emit offset forward/back (local Y), rotates with facing.");
+		offsetZSpinner.setToolTipText("Fixed emit offset up (local Z, positive), rotates with facing.");
+
+		endColorRow = styleRow("End color", endColorButton);
+		fadeStartRow = styleRow("Fade start %", fadeStartSpinner);
+
+		JPanel sections = new JPanel();
+		sections.setLayout(new BoxLayout(sections, BoxLayout.Y_AXIS));
+		sections.add(section("Appearance", true,
+			styleRow("Color", colorButton),
+			styleRow("Color over life", colorFadeCheck),
+			endColorRow,
+			fadeStartRow,
+			styleRow("Shape", shapeCombo),
+			styleRow("Opacity", alphaSpinner),
+			styleRow("Size", sizeSpinner),
+			styleRow("Size jitter", sizeJitterSpinner)));
+		sections.add(section("Emission", true,
+			styleRow("Rate /s", rateSpinner),
+			styleRow("Trail / tile", trailSpinner),
+			styleRow("Lifetime ms", lifetimeSpinner),
+			styleRow("Moving life %", moveLifetimeSpinner),
+			styleRow("Jitter", jitterSpinner),
+			styleRow("Feather", featherSpinner),
+			styleRow("Interpolate", interpolationSpinner)));
+		sections.add(section("Motion & forces", true,
+			styleRow("Rise", riseSpinner),
+			styleRow("Spread", spreadSpinner),
+			styleRow("Gravity", gravitySpinner),
+			vectorRow("Wind", windXSpinner, windYSpinner, windZSpinner),
+			styleRow("Drag", dragSpinner),
+			styleRow("Vortex", vortexSpinner),
+			styleRow("Emit scale %", emitScaleSpinner),
+			styleRow("Stretch %", stretchSpinner),
+			styleRow("Stretch ramp", stretchRampSpinner)));
+		sections.add(section("Placement", false,
+			vectorRow("Offset", offsetXSpinner, offsetYSpinner, offsetZSpinner),
+			styleRow("Depth bias", depthBiasSpinner)));
+		sections.add(section("Gating", false,
+			styleRow("Item filter", itemFilterField),
+			styleRow("Anim filter", animFilterField),
+			styleRow("Anim frames", animFramesField)));
+
+		JPanel sectionsHolder = new JPanel(new BorderLayout());
+		sectionsHolder.add(sections, BorderLayout.NORTH);
+		JScrollPane scroll = new JScrollPane(sectionsHolder,
+			JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+		scroll.setBorder(BorderFactory.createEmptyBorder());
+		scroll.getVerticalScrollBar().setUnitIncrement(16);
 
 		colorButton.addActionListener(e ->
 		{
@@ -854,10 +845,75 @@ class ModelViewerFrame extends JFrame
 		JPanel editor = new JPanel(new BorderLayout(0, 6));
 		editor.setBorder(BorderFactory.createTitledBorder("Profile"));
 		editor.add(editorHint, BorderLayout.NORTH);
-		editor.add(grid, BorderLayout.CENTER);
+		editor.add(scroll, BorderLayout.CENTER);
 		editor.add(south, BorderLayout.SOUTH);
 		setEditorEnabled(false);
 		return editor;
+	}
+
+	/**
+	 * One label-and-field row, sized so a vertical stack keeps its label column
+	 * aligned and the row does not stretch.
+	 */
+	private JComponent styleRow(String label, JComponent field)
+	{
+		JPanel row = new JPanel(new BorderLayout(6, 0));
+		JLabel l = new JLabel(label);
+		l.setPreferredSize(new Dimension(96, l.getPreferredSize().height));
+		row.add(l, BorderLayout.WEST);
+		row.add(field, BorderLayout.CENTER);
+		row.setAlignmentX(LEFT_ALIGNMENT);
+		row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+		return row;
+	}
+
+	/**
+	 * A single row carrying a three-component vector (X, Y, Z) as three
+	 * side-by-side fields, so a vector takes one line instead of three.
+	 */
+	private JComponent vectorRow(String label, JComponent x, JComponent y, JComponent z)
+	{
+		JPanel trio = new JPanel(new GridLayout(1, 3, 4, 0));
+		trio.add(x);
+		trio.add(y);
+		trio.add(z);
+		return styleRow(label, trio);
+	}
+
+	/**
+	 * A titled section whose fields collapse behind a clickable header, so the
+	 * long field list can be folded down to the groups being worked on.
+	 */
+	private JComponent section(String title, boolean expanded, JComponent... rows)
+	{
+		JPanel content = new JPanel();
+		content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+		content.setBorder(BorderFactory.createEmptyBorder(2, 8, 4, 0));
+		for (JComponent row : rows)
+		{
+			content.add(row);
+		}
+		content.setVisible(expanded);
+
+		JButton header = new JButton((expanded ? "▾  " : "▸  ") + title);
+		header.setHorizontalAlignment(SwingConstants.LEFT);
+		header.setFocusPainted(false);
+		header.setAlignmentX(LEFT_ALIGNMENT);
+		header.setMaximumSize(new Dimension(Integer.MAX_VALUE, header.getPreferredSize().height));
+		header.addActionListener(e ->
+		{
+			boolean open = !content.isVisible();
+			content.setVisible(open);
+			header.setText((open ? "▾  " : "▸  ") + title);
+			content.revalidate();
+			content.repaint();
+		});
+
+		JPanel panel = new JPanel(new BorderLayout());
+		panel.add(header, BorderLayout.NORTH);
+		panel.add(content, BorderLayout.CENTER);
+		panel.setAlignmentX(LEFT_ALIGNMENT);
+		return panel;
 	}
 
 	@Nullable
@@ -984,6 +1040,15 @@ class ModelViewerFrame extends JFrame
 		boolean on = colorFadeCheck.isEnabled() && colorFadeCheck.isSelected();
 		endColorButton.setEnabled(on);
 		fadeStartSpinner.setEnabled(on);
+		// Fold the end colour and fade-start rows away entirely while off, so
+		// the common single-colour profile shows two fewer rows
+		if (endColorRow != null)
+		{
+			endColorRow.setVisible(on);
+			fadeStartRow.setVisible(on);
+			endColorRow.getParent().revalidate();
+			endColorRow.getParent().repaint();
+		}
 	}
 
 	private static String joinIds(Set<Integer> ids)
