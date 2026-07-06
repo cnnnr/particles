@@ -123,6 +123,13 @@ class EmitterProfile
 	 */
 	private int stretch = 0;
 	/**
+	 * How much of the particle's life it holds its round shape before
+	 * stretching to the full amount (0 = stretched the whole time; 100 =
+	 * starts round and elongates late, like a droplet letting go). The ramp
+	 * is late-biased over the remaining life.
+	 */
+	private int stretchRamp = 0;
+	/**
 	 * Random spawn offset around the emitter vertex in local units.
 	 */
 	private int spawnJitter = 6;
@@ -228,6 +235,7 @@ class EmitterProfile
 		spreadSpeed = other.spreadSpeed;
 		gravity = other.gravity;
 		stretch = other.stretch;
+		stretchRamp = other.stretchRamp;
 		spawnJitter = other.spawnJitter;
 		featherStrength = other.featherStrength;
 		interpolation = other.interpolation;

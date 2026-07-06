@@ -50,6 +50,11 @@ class ParticleStyle
 	 */
 	private final float stretchFactor;
 	/**
+	 * Life fraction at which stretch begins as a multiplier (1 = full stretch
+	 * from spawn, 0 = starts round and ramps up over life). See EmitterProfile.
+	 */
+	private final float stretchRampStart;
+	/**
 	 * The profile's base diameter; the renderer needs it to cap the stretch
 	 * so an elongated billboard stays inside the batch bounds volume.
 	 */
@@ -98,6 +103,7 @@ class ParticleStyle
 		this.spreadSpeed = profile.getSpreadSpeed();
 		this.gravity = profile.getGravity();
 		this.stretchFactor = 1f + Math.max(0, profile.getStretch()) / 100f;
+		this.stretchRampStart = 1f - Math.max(0, Math.min(100, profile.getStretchRamp())) / 100f;
 		this.baseSize = profile.getSize();
 		this.spawnJitter = profile.getSpawnJitter();
 		this.featherStrength = profile.getFeatherStrength();

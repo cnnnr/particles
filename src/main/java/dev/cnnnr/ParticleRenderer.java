@@ -592,6 +592,17 @@ class ParticleRenderer
 			{
 				stretch = Math.min(stretch, Math.max(1f, (CLAMP_MARGIN - 1f) / discRadius));
 			}
+			// Ramp toward the (already bounds-capped) peak over the particle's
+			// life: a droplet holds its round shape while falling, then
+			// elongates late as it "lets go". Late-biased so the stretch stays
+			// subtle until the end. rampStart 1 = full stretch from spawn.
+			float rampStart = style.getStretchRampStart();
+			if (rampStart < 1f)
+			{
+				float ageFrac = 1f - p.lifeFraction();
+				float r = rampStart + (1f - rampStart) * ageFrac * ageFrac;
+				stretch = 1f + (stretch - 1f) * r;
+			}
 			if (stretch > 1f)
 			{
 				float vE = p.getVelX();
