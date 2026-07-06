@@ -207,6 +207,7 @@ class ModelViewerFrame extends JFrame
 
 	// Style editor controls
 	private final JButton colorButton = new JButton();
+	private final JButton endColorButton = new JButton();
 	private final JComboBox<Shape> shapeCombo = new JComboBox<>(Shape.values());
 	private final JSpinner alphaSpinner = new JSpinner(new SpinnerNumberModel(128, 0, 255, 4));
 	private final JSpinner sizeSpinner = new JSpinner(new SpinnerNumberModel(12, 2, 64, 1));
@@ -612,6 +613,8 @@ class ModelViewerFrame extends JFrame
 		JPanel grid = new JPanel(new GridLayout(0, 2, 4, 4));
 		grid.add(new JLabel("Color"));
 		grid.add(colorButton);
+		grid.add(new JLabel("End color"));
+		grid.add(endColorButton);
 		grid.add(new JLabel("Shape"));
 		grid.add(shapeCombo);
 		grid.add(new JLabel("Opacity"));
@@ -683,6 +686,22 @@ class ModelViewerFrame extends JFrame
 			if (picked != null)
 			{
 				colorButton.setBackground(picked);
+				saveStyle();
+			}
+		});
+		endColorButton.setToolTipText("Colour at the end of a particle's life. Particles fade from Color to this over their lifetime; set it equal to Color for no fade. Fire cooling, magic settling.");
+		endColorButton.addActionListener(e ->
+		{
+			EmitterProfile profile = selectedProfile();
+			if (profile == null)
+			{
+				return;
+			}
+			Color initial = new Color(profile.getColorEnd(), true);
+			Color picked = JColorChooser.showDialog(this, "End color", initial);
+			if (picked != null)
+			{
+				endColorButton.setBackground(picked);
 				saveStyle();
 			}
 		});
@@ -874,6 +893,8 @@ class ModelViewerFrame extends JFrame
 		populating = true;
 		Color color = new Color(profile.getColor(), true);
 		colorButton.setBackground(new Color(color.getRed(), color.getGreen(), color.getBlue()));
+		Color endColor = new Color(profile.getColorEnd(), true);
+		endColorButton.setBackground(new Color(endColor.getRed(), endColor.getGreen(), endColor.getBlue()));
 		shapeCombo.setSelectedItem(profile.getShape() == null ? Shape.DEFAULT : profile.getShape());
 		alphaSpinner.setValue(color.getAlpha());
 		sizeSpinner.setValue(profile.getSize());
@@ -952,6 +973,7 @@ class ModelViewerFrame extends JFrame
 	private void setEditorEnabled(boolean enabled)
 	{
 		colorButton.setEnabled(enabled);
+		endColorButton.setEnabled(enabled);
 		shapeCombo.setEnabled(enabled);
 		alphaSpinner.setEnabled(enabled);
 		sizeSpinner.setEnabled(enabled);
@@ -1000,9 +1022,14 @@ class ModelViewerFrame extends JFrame
 		}
 
 		Color rgb = colorButton.getBackground();
-		int argb = ((int) alphaSpinner.getValue() & 0xff) << 24
-			| (rgb.getRed() << 16) | (rgb.getGreen() << 8) | rgb.getBlue();
+		int alpha = (int) alphaSpinner.getValue() & 0xff;
+		int argb = alpha << 24 | (rgb.getRed() << 16) | (rgb.getGreen() << 8) | rgb.getBlue();
 		profile.setColor(argb);
+		// End colour shares the start's opacity, so a gradient is a pure hue
+		// shift; the life envelope still governs fade in and out
+		Color endRgb = endColorButton.getBackground();
+		int endArgb = alpha << 24 | (endRgb.getRed() << 16) | (endRgb.getGreen() << 8) | endRgb.getBlue();
+		profile.setColorEnd(endArgb);
 		profile.setShape((Shape) shapeCombo.getSelectedItem());
 		profile.setSize((int) sizeSpinner.getValue());
 		profile.setSizeJitter((int) sizeJitterSpinner.getValue());

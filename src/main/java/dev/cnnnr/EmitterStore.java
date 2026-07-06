@@ -172,6 +172,12 @@ class EmitterStore
 			{
 				profile.setEmitScale(100);
 			}
+			// Migration: end colour defaults to the start colour (no gradient);
+			// a missing key deserializes to 0, which would fade to transparent
+			if (profile.getColorEnd() == 0)
+			{
+				profile.setColorEnd(profile.getColor());
+			}
 		});
 		return result;
 	}

@@ -1,6 +1,5 @@
 package dev.cnnnr;
 
-import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -257,9 +256,11 @@ class ParticleRenderer
 
 	private ParticleStyle buildStyle(EmitterProfile profile)
 	{
-		Color color = new Color(profile.getColor(), true);
-		short target = JagexColor.rgbToHSL(color.getRGB(), 1.0d);
-		int baseAlpha = color.getAlpha();
+		int startArgb = profile.getColor();
+		int endArgb = profile.getColorEnd();
+		// Colour over life: interpolate start -> end across the fade steps.
+		// Off when the two match, which keeps the original constant-colour bake.
+		boolean gradient = endArgb != startArgb;
 
 		ModelData[][] templates = new ModelData[ParticleStyle.SIZE_MULTIPLIERS.length][ParticleStyle.FADE_STEPS];
 		for (int s = 0; s < ParticleStyle.SIZE_MULTIPLIERS.length; s++)
@@ -277,44 +278,68 @@ class ParticleRenderer
 			Shape shape = profile.getShape() == null ? Shape.DEFAULT : profile.getShape();
 			shapeWarp(lens, radius, shape);
 
-			// Recolor every distinct face color to the style's particle color
+			// Distinct source face colors to recolor, and the geometry falloff -
+			// both independent of the per-fade colour, so computed once here
 			Set<Short> originals = new HashSet<>();
 			for (short faceColor : lens.getFaceColors())
 			{
 				originals.add(faceColor);
 			}
-			for (short original : originals)
-			{
-				lens.recolor(original, target);
-			}
-
-			// Per-face alpha: soft glow, and the hollow center for Ring
 			float[] radial = shapeFalloff(lens, radius, shape);
 
 			for (int i = 0; i < ParticleStyle.FADE_STEPS; i++)
 			{
+				float life = (i + 0.5f) / ParticleStyle.FADE_STEPS;
+				int argb = gradient ? lerpArgb(startArgb, endArgb, life) : startArgb;
+				short target = JagexColor.rgbToHSL(argb, 1.0d);
+				int fadeAlpha = (argb >>> 24) & 0xFF;
 				// Soft life envelope: born invisible, bloom mid-life, melt away
-				float envelope = envelope((i + 0.5f) / ParticleStyle.FADE_STEPS);
-				ModelData variant = lens.shallowCopy().cloneTransparencies(true);
+				float envelope = envelope(life);
+				ModelData variant = lens.shallowCopy().cloneColors().cloneTransparencies(true);
+				for (short original : originals)
+				{
+					variant.recolor(original, target);
+				}
 				byte[] transparencies = variant.getFaceTransparencies();
 				for (int f = 0; f < transparencies.length; f++)
 				{
-					int alpha = (int) (baseAlpha * envelope * radial[f]);
+					int alpha = (int) (fadeAlpha * envelope * radial[f]);
 					transparencies[f] = (byte) Math.min(254, Math.max(1, 255 - alpha));
 				}
 				templates[s][i] = variant;
 			}
 		}
 
-		// Bake the style's lit colors once; canvas slots copy them in place of
-		// per-tick relighting. Shading is constant, which suits a glow.
-		Model probe = templates[1][0].shallowCopy().light(LIGHT_AMBIENT, LIGHT_CONTRAST,
-			ModelData.DEFAULT_X, ModelData.DEFAULT_Y, ModelData.DEFAULT_Z);
-		int[] lit1 = probe.getFaceColors1().clone();
-		int[] lit2 = probe.getFaceColors2().clone();
-		int[] lit3 = probe.getFaceColors3().clone();
+		// Bake the lit colors per fade step; canvas slots copy them in place of
+		// per-tick relighting. Without a gradient every step is identical and
+		// the batch copies just once per style (see writeSlot).
+		int[][] lit1 = new int[ParticleStyle.FADE_STEPS][];
+		int[][] lit2 = new int[ParticleStyle.FADE_STEPS][];
+		int[][] lit3 = new int[ParticleStyle.FADE_STEPS][];
+		for (int i = 0; i < ParticleStyle.FADE_STEPS; i++)
+		{
+			Model probe = templates[1][i].shallowCopy().light(LIGHT_AMBIENT, LIGHT_CONTRAST,
+				ModelData.DEFAULT_X, ModelData.DEFAULT_Y, ModelData.DEFAULT_Z);
+			lit1[i] = probe.getFaceColors1().clone();
+			lit2[i] = probe.getFaceColors2().clone();
+			lit3[i] = probe.getFaceColors3().clone();
+		}
 
 		return new ParticleStyle(templates, lit1, lit2, lit3, profile);
+	}
+
+	/**
+	 * Linear per-channel interpolation between two ARGB colours.
+	 */
+	private static int lerpArgb(int a, int b, float t)
+	{
+		int aa = (a >>> 24) & 0xFF, ar = (a >>> 16) & 0xFF, ag = (a >>> 8) & 0xFF, ab = a & 0xFF;
+		int ba = (b >>> 24) & 0xFF, br = (b >>> 16) & 0xFF, bg = (b >>> 8) & 0xFF, bb = b & 0xFF;
+		int oa = Math.round(aa + (ba - aa) * t);
+		int or = Math.round(ar + (br - ar) * t);
+		int og = Math.round(ag + (bg - ag) * t);
+		int ob = Math.round(ab + (bb - ab) * t);
+		return (oa << 24) | (or << 16) | (og << 8) | ob;
 	}
 
 	/**
@@ -665,24 +690,37 @@ class ParticleRenderer
 
 		int variant = size * ParticleStyle.FADE_STEPS + fade;
 		int faceBase = slot * templateFaceCount;
+		boolean gradient = style.isColorGradient();
 		if (canvas.slotStyle[slot] != style)
 		{
 			canvas.slotStyle[slot] = style;
 			canvas.slotVariant[slot] = -1;
-			// Unlit colors for renderers that relight, lit for the others.
-			// Every template of a style shares face colors, so these only
-			// move when the slot changes hands between styles
-			ModelData template = style.getTemplates()[size][fade];
-			System.arraycopy(template.getFaceColors(), 0, canvas.unlitColors, faceBase, templateFaceCount);
-			System.arraycopy(style.getLitColors1(), 0, canvas.colors1, faceBase, templateFaceCount);
-			System.arraycopy(style.getLitColors2(), 0, canvas.colors2, faceBase, templateFaceCount);
-			System.arraycopy(style.getLitColors3(), 0, canvas.colors3, faceBase, templateFaceCount);
+			// Without a gradient the colour is constant over life, so copy it
+			// once when the slot changes hands between styles. Unlit colors are
+			// for renderers that relight, lit for the others.
+			if (!gradient)
+			{
+				System.arraycopy(style.getTemplates()[size][0].getFaceColors(), 0,
+					canvas.unlitColors, faceBase, templateFaceCount);
+				System.arraycopy(style.getLitColors1()[0], 0, canvas.colors1, faceBase, templateFaceCount);
+				System.arraycopy(style.getLitColors2()[0], 0, canvas.colors2, faceBase, templateFaceCount);
+				System.arraycopy(style.getLitColors3()[0], 0, canvas.colors3, faceBase, templateFaceCount);
+			}
 		}
 		if (canvas.slotVariant[slot] != variant)
 		{
 			canvas.slotVariant[slot] = variant;
 			System.arraycopy(style.getTemplates()[size][fade].getFaceTransparencies(), 0,
 				canvas.transparencies, faceBase, templateFaceCount);
+			// With a gradient the colour moves each fade step, so recopy it here
+			if (gradient)
+			{
+				System.arraycopy(style.getTemplates()[size][fade].getFaceColors(), 0,
+					canvas.unlitColors, faceBase, templateFaceCount);
+				System.arraycopy(style.getLitColors1()[fade], 0, canvas.colors1, faceBase, templateFaceCount);
+				System.arraycopy(style.getLitColors2()[fade], 0, canvas.colors2, faceBase, templateFaceCount);
+				System.arraycopy(style.getLitColors3()[fade], 0, canvas.colors3, faceBase, templateFaceCount);
+			}
 		}
 	}
 
