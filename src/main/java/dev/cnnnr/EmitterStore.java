@@ -2,13 +2,17 @@ package dev.cnnnr;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -760,6 +764,55 @@ class EmitterStore
 		Map<String, ProfileFolder> f = new LinkedHashMap<>();
 		folders.forEach((k, v) -> f.put(k, v.copy()));
 		return new Snapshot(p, f);
+	}
+
+	/**
+	 * Developer helper: write the live profiles and folders out as the bundled
+	 * presets.json and folders.json in a chosen directory, so the authoring
+	 * config can be re-exported into the shipped pack in one click. Refuses to
+	 * write (and reports why) if the folder invariant is violated, so a broken
+	 * pair can never land. Returns a human summary for a dialog.
+	 */
+	synchronized String exportBundle(File dir) throws IOException
+	{
+		List<String> problems = new ArrayList<>();
+		Map<String, Integer> counts = new HashMap<>();
+		for (EmitterProfile profile : profiles.values())
+		{
+			String folderId = profile.getFolderId();
+			if (folderId == null)
+			{
+				continue;
+			}
+			if (!folders.containsKey(folderId))
+			{
+				problems.add("profile \"" + profile.getName() + "\" points at missing folder " + folderId);
+			}
+			else
+			{
+				counts.merge(folderId, 1, Integer::sum);
+			}
+		}
+		for (Map.Entry<String, ProfileFolder> entry : folders.entrySet())
+		{
+			int members = counts.getOrDefault(entry.getKey(), 0);
+			if (members < 2)
+			{
+				problems.add("folder \"" + entry.getValue().getName() + "\" has " + members
+					+ " member(s); needs at least 2");
+			}
+		}
+		if (!problems.isEmpty())
+		{
+			return "Nothing written - fix these first:\n - " + String.join("\n - ", problems);
+		}
+
+		Files.write(new File(dir, "presets.json").toPath(),
+			gson.toJson(profiles, MAP_TYPE).getBytes(StandardCharsets.UTF_8));
+		Files.write(new File(dir, "folders.json").toPath(),
+			gson.toJson(folders, FOLDERS_TYPE).getBytes(StandardCharsets.UTF_8));
+		return "Wrote " + profiles.size() + " profiles and " + folders.size() + " folders to\n"
+			+ dir.getAbsolutePath();
 	}
 
 	// --- Folders -------------------------------------------------------------

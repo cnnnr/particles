@@ -329,7 +329,8 @@ class ParticlesPanel extends PluginPanel
 		}
 	};
 
-	ParticlesPanel(boolean developerMode, Runnable openViewer, BiConsumer<String, Boolean> onToggleProfile,
+	ParticlesPanel(boolean developerMode, Runnable openViewer, Runnable onExport,
+		BiConsumer<String, Boolean> onToggleProfile,
 		BiConsumer<String, Boolean> onToggleWip, BulkToggle onToggleMany,
 		BiConsumer<String, EmitterProfile> onPasteStyle, Consumer<String> onDeleteProfile,
 		Consumer<String> onRenameProfile, Consumer<String> onEditProfile, FolderActions folderActions)
@@ -408,8 +409,12 @@ class ParticlesPanel extends PluginPanel
 		{
 			JButton open = new JButton("Vertex picker");
 			open.addActionListener(e -> openViewer.run());
-			JPanel openRow = new JPanel(new BorderLayout());
-			openRow.add(open, BorderLayout.CENTER);
+			JButton export = new JButton("Export bundle");
+			export.setToolTipText("Mirror the current profiles and folders into presets.json + folders.json");
+			export.addActionListener(e -> onExport.run());
+			JPanel openRow = new JPanel(new GridLayout(1, 2, 4, 0));
+			openRow.add(open);
+			openRow.add(export);
 			openRow.setAlignmentX(Component.LEFT_ALIGNMENT);
 			controls.add(openRow);
 			controls.add(Box.createVerticalStrut(6));
@@ -607,10 +612,10 @@ class ParticlesPanel extends PluginPanel
 		boolean worn = EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType())
 			&& presentSignatures.contains(profile.getSignature());
 		String text = profile.getName()
-			+ (profile.isProjectileTarget() ? " [proj " + profile.getProjectileId() + "]" : "")
-			+ (profile.isObjectTarget() ? " [obj " + profile.getObjectId() + "]" : "")
-			+ (profile.isNpcTarget() ? " [npc " + profile.getNpcId() + "]" : "")
-			+ (profile.isGraphicTarget() ? " [gfx " + profile.getGraphicId() + "]" : "");
+			+ (profile.isProjectileTarget() && developerMode ? " [proj " + profile.getProjectileId() + "]" : "")
+			+ (profile.isObjectTarget() && developerMode ? " [obj " + profile.getObjectId() + "]" : "")
+			+ (profile.isNpcTarget() && developerMode ? " [npc " + profile.getNpcId() + "]" : "")
+			+ (profile.isGraphicTarget() && developerMode ? " [gfx " + profile.getGraphicId() + "]" : "");
 
 		JCheckBox toggle = new JCheckBox(text, profile.isEnabled());
 		// Rows truncate in the narrow sidebar; the tooltip carries the full

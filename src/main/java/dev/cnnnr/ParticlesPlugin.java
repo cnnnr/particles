@@ -552,7 +552,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 		overlayManager.add(overlay);
 
-		panel = new ParticlesPanel(developerMode, this::openViewer, store::setEnabled, store::setWip,
+		panel = new ParticlesPanel(developerMode, this::openViewer, this::exportBundle,
+			store::setEnabled, store::setWip,
 			store::setEnabledMany, store::pasteStyle, store::delete, this::renameProfile, this::editProfile,
 			new ParticlesPanel.FolderActions(store::setFolderEnabled, store::setFolderWip, this::renameFolder,
 				store::dissolveFolder, store::removeFromFolder, store::createFolder, store::addToFolder));
@@ -4822,6 +4823,41 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		if (name != null)
 		{
 			store.renameFolder(folderId, name);
+		}
+	}
+
+	/**
+	 * Developer one-click: mirror the authoring config into the bundled pack by
+	 * writing presets.json + folders.json into a chosen folder (remembers the
+	 * last one). User-initiated file write via JFileChooser.
+	 */
+	private void exportBundle()
+	{
+		javax.swing.JFileChooser chooser = new javax.swing.JFileChooser();
+		chooser.setFileSelectionMode(javax.swing.JFileChooser.DIRECTORIES_ONLY);
+		chooser.setDialogTitle("Export to resources folder (writes presets.json + folders.json)");
+		String last = configManager.getConfiguration(ParticlesConfig.GROUP, "exportDir");
+		if (last != null && !last.isEmpty())
+		{
+			chooser.setCurrentDirectory(new java.io.File(last));
+		}
+		if (chooser.showDialog(panel, "Export") != javax.swing.JFileChooser.APPROVE_OPTION)
+		{
+			return;
+		}
+		java.io.File dir = chooser.getSelectedFile();
+		configManager.setConfiguration(ParticlesConfig.GROUP, "exportDir", dir.getAbsolutePath());
+		try
+		{
+			String summary = store.exportBundle(dir);
+			javax.swing.JOptionPane.showMessageDialog(panel, summary, "Particles export",
+				javax.swing.JOptionPane.INFORMATION_MESSAGE);
+		}
+		catch (Exception e)
+		{
+			log.warn("Preset export failed", e);
+			javax.swing.JOptionPane.showMessageDialog(panel, "Export failed: " + e.getMessage(),
+				"Particles export", javax.swing.JOptionPane.ERROR_MESSAGE);
 		}
 	}
 
