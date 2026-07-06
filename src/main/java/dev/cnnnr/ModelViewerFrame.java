@@ -429,7 +429,7 @@ class ModelViewerFrame extends JFrame
 		bottom.add(addPanelHolder, BorderLayout.NORTH);
 		bottom.add(buildStyleEditor(), BorderLayout.CENTER);
 		left.add(bottom, BorderLayout.SOUTH);
-		left.setPreferredSize(new Dimension(250, 0));
+		left.setPreferredSize(new Dimension(400, 0));
 
 		scrubSlider.addChangeListener(e -> applyScrub());
 		scrubPanel.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
@@ -442,10 +442,10 @@ class ModelViewerFrame extends JFrame
 		right.add(scrubPanel, BorderLayout.SOUTH);
 
 		JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
-		split.setDividerLocation(250);
+		split.setDividerLocation(400);
 		setContentPane(split);
 
-		setSize(1040, 780);
+		setSize(1190, 780);
 		setLocationRelativeTo(null);
 	}
 
@@ -858,6 +858,9 @@ class ModelViewerFrame extends JFrame
 	private JComponent styleRow(String label, JComponent field)
 	{
 		JPanel row = new JPanel(new BorderLayout(6, 0));
+		// Slight right and bottom margin so fields aren't flush to the edge or
+		// stacked tight against the next row
+		row.setBorder(BorderFactory.createEmptyBorder(0, 0, 4, 8));
 		JLabel l = new JLabel(label);
 		l.setPreferredSize(new Dimension(96, l.getPreferredSize().height));
 		row.add(l, BorderLayout.WEST);
