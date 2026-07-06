@@ -79,9 +79,21 @@ class Particle
 		// Gravity: downward acceleration on the vertical velocity (scene z is
 		// negative-up, so falling means an increasing z). Constant when 0.
 		velZ += style.getGravity() * dt;
+		// Drag: shed a fraction of the particle's own velocity so rises,
+		// spreads and falls settle over life. With gravity this converges on a
+		// terminal fall speed. Wind (below) is a separate steady drift and is
+		// not decayed - it is the medium moving, not the particle's momentum.
+		float drag = style.getDragPerSec();
+		if (drag > 0f)
+		{
+			float keep = Math.max(0f, 1f - drag * dt);
+			velX *= keep;
+			velY *= keep;
+			velZ *= keep;
+		}
 		float t = age * wobbleFreq + wobblePhase;
-		x += (velX + (float) Math.sin(t) * wobbleAmp) * dt;
-		y += (velY + (float) Math.cos(t * 1.3f) * wobbleAmp) * dt;
+		x += (velX + style.getWindX() + (float) Math.sin(t) * wobbleAmp) * dt;
+		y += (velY + style.getWindY() + (float) Math.cos(t * 1.3f) * wobbleAmp) * dt;
 		z += velZ * dt;
 	}
 

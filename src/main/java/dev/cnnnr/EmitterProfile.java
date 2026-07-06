@@ -124,6 +124,20 @@ class EmitterProfile
 	 */
 	private int gravity = 0;
 	/**
+	 * Steady horizontal wind that carries every particle, in local units per
+	 * second. X is east (+) / west (-), Y is north (+) / south (-). World-
+	 * aligned, so it blows the same compass direction no matter which way the
+	 * wearer faces. Leaning flames, drifting smoke, blowing snow.
+	 */
+	private int windX = 0;
+	private int windY = 0;
+	/**
+	 * Air resistance: each particle sheds this percent of its own velocity per
+	 * second, so rises, spreads, and falls settle over life instead of coasting
+	 * forever (0 = none). Paired with gravity it yields a terminal fall speed.
+	 */
+	private int drag = 0;
+	/**
 	 * Elongate the particle this percent along its screen-projected velocity
 	 * (0 = round). Makes fast drops read as falling streaks. Auto-capped so
 	 * the stretched billboard stays inside the render bounds.
@@ -242,6 +256,9 @@ class EmitterProfile
 		riseSpeed = other.riseSpeed;
 		spreadSpeed = other.spreadSpeed;
 		gravity = other.gravity;
+		windX = other.windX;
+		windY = other.windY;
+		drag = other.drag;
 		stretch = other.stretch;
 		stretchRamp = other.stretchRamp;
 		spawnJitter = other.spawnJitter;

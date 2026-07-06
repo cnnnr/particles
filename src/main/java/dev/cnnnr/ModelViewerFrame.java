@@ -218,6 +218,9 @@ class ModelViewerFrame extends JFrame
 	private final JSpinner riseSpinner = new JSpinner(new SpinnerNumberModel(26, -256, 256, 2));
 	private final JSpinner spreadSpinner = new JSpinner(new SpinnerNumberModel(12, 0, 256, 2));
 	private final JSpinner gravitySpinner = new JSpinner(new SpinnerNumberModel(0, 0, 512, 8));
+	private final JSpinner windXSpinner = new JSpinner(new SpinnerNumberModel(0, -128, 128, 4));
+	private final JSpinner windYSpinner = new JSpinner(new SpinnerNumberModel(0, -128, 128, 4));
+	private final JSpinner dragSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 300, 10));
 	private final JSpinner stretchSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 300, 10));
 	private final JSpinner stretchRampSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 100, 10));
 	private final JSpinner jitterSpinner = new JSpinner(new SpinnerNumberModel(10, 0, 64, 1));
@@ -628,6 +631,12 @@ class ModelViewerFrame extends JFrame
 		grid.add(spreadSpinner);
 		grid.add(new JLabel("Gravity"));
 		grid.add(gravitySpinner);
+		grid.add(new JLabel("Wind X"));
+		grid.add(windXSpinner);
+		grid.add(new JLabel("Wind Y"));
+		grid.add(windYSpinner);
+		grid.add(new JLabel("Drag"));
+		grid.add(dragSpinner);
 		grid.add(new JLabel("Stretch %"));
 		grid.add(stretchSpinner);
 		grid.add(new JLabel("Stretch ramp"));
@@ -685,6 +694,12 @@ class ModelViewerFrame extends JFrame
 		spreadSpinner.addChangeListener(e -> saveStyle());
 		gravitySpinner.addChangeListener(e -> saveStyle());
 		gravitySpinner.setToolTipText("Downward acceleration. 0 = constant velocity; higher makes particles fall and speed up - the signature of a blood or water drip. Pair with Rise near 0.");
+		windXSpinner.addChangeListener(e -> saveStyle());
+		windXSpinner.setToolTipText("Steady horizontal drift in local units/sec. X is east (+) / west (-). World-aligned, so it blows the same way regardless of facing. Leaning flames, drifting smoke.");
+		windYSpinner.addChangeListener(e -> saveStyle());
+		windYSpinner.setToolTipText("Steady horizontal drift in local units/sec. Y is north (+) / south (-). World-aligned, so it blows the same way regardless of facing.");
+		dragSpinner.addChangeListener(e -> saveStyle());
+		dragSpinner.setToolTipText("Air resistance: percent of a particle's own velocity shed per second, so rise/spread/fall settle over life (0 = none). With Gravity it gives a terminal fall speed.");
 		stretchSpinner.addChangeListener(e -> saveStyle());
 		stretchSpinner.setToolTipText("Elongate the particle this percent along its motion, so fast drops read as falling streaks. 0 = round. Auto-capped on large sizes.");
 		stretchRampSpinner.addChangeListener(e -> saveStyle());
@@ -855,6 +870,9 @@ class ModelViewerFrame extends JFrame
 		riseSpinner.setValue(profile.getRiseSpeed());
 		spreadSpinner.setValue(profile.getSpreadSpeed());
 		gravitySpinner.setValue(profile.getGravity());
+		windXSpinner.setValue(profile.getWindX());
+		windYSpinner.setValue(profile.getWindY());
+		dragSpinner.setValue(profile.getDrag());
 		stretchSpinner.setValue(profile.getStretch());
 		stretchRampSpinner.setValue(profile.getStretchRamp());
 		jitterSpinner.setValue(profile.getSpawnJitter());
@@ -922,6 +940,9 @@ class ModelViewerFrame extends JFrame
 		riseSpinner.setEnabled(enabled);
 		spreadSpinner.setEnabled(enabled);
 		gravitySpinner.setEnabled(enabled);
+		windXSpinner.setEnabled(enabled);
+		windYSpinner.setEnabled(enabled);
+		dragSpinner.setEnabled(enabled);
 		stretchSpinner.setEnabled(enabled);
 		stretchRampSpinner.setEnabled(enabled);
 		jitterSpinner.setEnabled(enabled);
@@ -966,6 +987,9 @@ class ModelViewerFrame extends JFrame
 		profile.setRiseSpeed((int) riseSpinner.getValue());
 		profile.setSpreadSpeed((int) spreadSpinner.getValue());
 		profile.setGravity((int) gravitySpinner.getValue());
+		profile.setWindX((int) windXSpinner.getValue());
+		profile.setWindY((int) windYSpinner.getValue());
+		profile.setDrag((int) dragSpinner.getValue());
 		profile.setStretch((int) stretchSpinner.getValue());
 		profile.setStretchRamp((int) stretchRampSpinner.getValue());
 		profile.setSpawnJitter((int) jitterSpinner.getValue());

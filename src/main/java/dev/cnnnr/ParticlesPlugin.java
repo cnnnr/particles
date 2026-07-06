@@ -4516,7 +4516,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
 		Graphics2D g = image.createGraphics();
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-		g.setColor(new Color(255, 152, 31));
+		g.setColor(new Color(255, 171, 82));
 		g.fillOval(2, 10, 5, 5);
 		g.fillOval(9, 8, 4, 4);
 		g.setColor(new Color(255, 152, 31, 170));
