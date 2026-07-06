@@ -739,8 +739,9 @@ class ParticlesPanel extends PluginPanel
 		String folderId = folder.getId();
 		if (!developerMode)
 		{
-			JCheckBox toggle = new JCheckBox(folder.getName(), folder.isEnabled());
-			toggle.setToolTipText(folder.getName());
+			String label = folder.getName() + " (" + childrenOf(folderId).size() + ")";
+			JCheckBox toggle = new JCheckBox(label, folder.isEnabled());
+			toggle.setToolTipText(label);
 			toggle.addActionListener(e -> folderActions.toggleEnabled.accept(folderId, toggle.isSelected()));
 			JPanel row = new JPanel(new BorderLayout());
 			row.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -937,7 +938,8 @@ class ParticlesPanel extends PluginPanel
 
 	private boolean isValidDrop(JComponent target)
 	{
-		if (dragKey == null || !dragCategory.equals(target.getClientProperty(DROP_CAT)))
+		if (dragKey == null || dragCategory == null
+			|| !dragCategory.equals(target.getClientProperty(DROP_CAT)))
 		{
 			return false;
 		}
