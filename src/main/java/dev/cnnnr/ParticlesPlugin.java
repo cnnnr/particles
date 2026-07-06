@@ -514,6 +514,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	@Getter
 	private String oracleLine = "";
 	private String lastOracleDump = "";
+	/**
+	 * NPC stacked-draw oracle line for the hovered tile; empty outside
+	 * developer mode. See {@link #updateNpcStackOracle}.
+	 */
+	@Getter
+	private String npcOracleLine = "";
+	private String lastNpcOracleDump = "";
 
 	@Override
 	protected void startUp() throws Exception
@@ -1071,6 +1078,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		processNpcs(dt, level, radiusUnits, localLp);
 		emitGraphicsObjects(dt, level, radiusUnits, localLp);
 		updateStackOracle(level);
+		updateNpcStackOracle(level);
 		emitProjectiles(dt);
 		particleSystem.update(dt, deathStats);
 		renderer.sync(particleSystem.getParticles(), anchorWorldView, anchorLevel);
@@ -1291,6 +1299,133 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			case PLAYER_SIXTH_OPTION:
 			case PLAYER_SEVENTH_OPTION:
 			case PLAYER_EIGHTH_OPTION:
+				return true;
+			default:
+				return false;
+		}
+	}
+
+	/**
+	 * Dev diagnostic, the NPC analog of {@link #updateStackOracle}: the hover
+	 * menu's top NPC entry is the DRAWN npc among a stack - ground truth no API
+	 * exposes - scored live against the candidate rule (lowest scene index
+	 * wins) so the true stacked-NPC draw order can be mined before an emission
+	 * gate is wired. Works on any NPCs, not just profiled ones, so stacks can
+	 * be sampled wherever they occur.
+	 */
+	private void updateNpcStackOracle(int level)
+	{
+		npcOracleLine = "";
+		if (!developerMode || !config.showAnchor())
+		{
+			return;
+		}
+
+		// Menus build bottom-up: the last vanilla NPC entry renders as the top
+		// row, which is the drawn npc. Only vanilla options - plugin entries lie
+		MenuEntry[] entries = client.getMenu().getMenuEntries();
+		NPC winner = null;
+		Map<NPC, Integer> menuIndices = new HashMap<>();
+		for (MenuEntry entry : entries)
+		{
+			NPC npc = entry.getNpc();
+			if (npc != null && isVanillaNpcOption(entry.getType()))
+			{
+				menuIndices.put(npc, entry.getIdentifier());
+				winner = npc;
+			}
+		}
+		if (winner == null)
+		{
+			return;
+		}
+
+		// The stack: centered size-1 NPCs sharing the drawn npc's tile. Only
+		// size-1 centered actors are deduped by the engine; movers always draw
+		long key = tileKey(winner);
+		List<NPC> stack = new ArrayList<>();
+		for (NPC npc : client.getTopLevelWorldView().npcs())
+		{
+			if (npc == null || npc.getWorldLocation().getPlane() != level || !isCentered(npc))
+			{
+				continue;
+			}
+			NPCComposition composition = npc.getTransformedComposition();
+			if (composition == null || composition.getSize() != 1)
+			{
+				continue;
+			}
+			if (tileKey(npc) == key)
+			{
+				stack.add(npc);
+			}
+		}
+
+		// Candidate rule scored against the oracle: the lowest scene-index npc
+		// draws (the analog of the players' ascending-index winner)
+		NPC pred = null;
+		for (NPC npc : stack)
+		{
+			if (pred == null || npc.getIndex() < pred.getIndex())
+			{
+				pred = npc;
+			}
+		}
+		String predText = (pred == null ? "-" : pred.getName() + "#" + pred.getIndex())
+			+ (!isCentered(winner) ? " n/a-moving"
+			: pred == winner ? " MATCH"
+			: " MISS");
+
+		// Does the scene-wide index (getIndex) agree with the menu identifier?
+		// A mismatch would mean getIndex is the wrong source for the rule
+		boolean idxOk = true;
+		for (NPC npc : stack)
+		{
+			Integer menuIdx = menuIndices.get(npc);
+			if (menuIdx != null && menuIdx != npc.getIndex())
+			{
+				idxOk = false;
+			}
+		}
+
+		npcOracleLine = "npc stack " + stack.size()
+			+ " | drawn " + winner.getName() + "#" + winner.getIndex()
+			+ (isCentered(winner) ? "" : " (moving)")
+			+ " | pred " + predText
+			+ " | idxSrc " + (idxOk ? "ok" : "MISMATCH");
+
+		// One dump per distinct situation, with everything a rule could depend
+		// on: scene index, type id, menu identifier, exact position
+		StringBuilder dump = new StringBuilder("npc stack oracle: drawn=")
+			.append(winner.getName()).append('#').append(winner.getIndex())
+			.append(" pred=").append(predText)
+			.append(" idxOk=").append(idxOk);
+		for (NPC npc : stack)
+		{
+			LocalPoint lp = npc.getLocalLocation();
+			dump.append(" | ").append(npc.getName())
+				.append('#').append(npc.getIndex())
+				.append("/id").append(npc.getId())
+				.append("/menu").append(menuIndices.getOrDefault(npc, -1))
+				.append(" lp=").append(lp.getX()).append(',').append(lp.getY());
+		}
+		String text = dump.toString();
+		if (!text.equals(lastNpcOracleDump))
+		{
+			lastNpcOracleDump = text;
+			log.debug(text);
+		}
+	}
+
+	private static boolean isVanillaNpcOption(MenuAction action)
+	{
+		switch (action)
+		{
+			case NPC_FIRST_OPTION:
+			case NPC_SECOND_OPTION:
+			case NPC_THIRD_OPTION:
+			case NPC_FOURTH_OPTION:
+			case NPC_FIFTH_OPTION:
 				return true;
 			default:
 				return false;
@@ -1816,15 +1951,15 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * Standing exactly at a tile center - the only state the engine's
 	 * stacked-actor dedup applies to.
 	 */
-	private static boolean isCentered(Player player)
+	private static boolean isCentered(Actor actor)
 	{
-		LocalPoint lp = player.getLocalLocation();
+		LocalPoint lp = actor.getLocalLocation();
 		return (lp.getX() & 127) == 64 && (lp.getY() & 127) == 64;
 	}
 
-	private static long tileKey(Player player)
+	private static long tileKey(Actor actor)
 	{
-		LocalPoint lp = player.getLocalLocation();
+		LocalPoint lp = actor.getLocalLocation();
 		return ((long) (lp.getX() >> 7) << 32) | ((lp.getY() >> 7) & 0xffffffffL);
 	}
 

@@ -63,6 +63,16 @@ class ParticlesOverlay extends Overlay
 			graphics.drawString(oracle, 10, 55);
 		}
 
+		// NPC stacked-draw oracle, one line below
+		String npcOracle = plugin.getNpcOracleLine();
+		if (!npcOracle.isEmpty())
+		{
+			graphics.setColor(Color.BLACK);
+			graphics.drawString(npcOracle, 11, 71);
+			graphics.setColor(Color.ORANGE);
+			graphics.drawString(npcOracle, 10, 70);
+		}
+
 		if (plugin.getAnchorCount() == 0)
 		{
 			return null;
