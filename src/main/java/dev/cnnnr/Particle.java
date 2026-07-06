@@ -94,7 +94,8 @@ class Particle
 		float t = age * wobbleFreq + wobblePhase;
 		x += (velX + style.getWindX() + (float) Math.sin(t) * wobbleAmp) * dt;
 		y += (velY + style.getWindY() + (float) Math.cos(t * 1.3f) * wobbleAmp) * dt;
-		z += velZ * dt;
+		// Wind Z is up-positive like Rise; scene z is negative-up, so subtract.
+		z += (velZ - style.getWindZ()) * dt;
 	}
 
 	boolean isDead()

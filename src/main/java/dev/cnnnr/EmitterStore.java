@@ -166,6 +166,12 @@ class EmitterStore
 			{
 				profile.setShape(Shape.DEFAULT);
 			}
+			// Migration: emit scale is a percent defaulting to 100; a missing
+			// key deserializes to 0, which would collapse emitters to a point
+			if (profile.getEmitScale() <= 0)
+			{
+				profile.setEmitScale(100);
+			}
 		});
 		return result;
 	}

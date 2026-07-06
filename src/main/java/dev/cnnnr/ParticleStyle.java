@@ -56,16 +56,27 @@ class ParticleStyle
 	 */
 	private final float gravity;
 	/**
-	 * Steady world-aligned horizontal wind drift in local units per second
-	 * (X east, Y north); see EmitterProfile.
+	 * Steady world-aligned wind drift in local units per second (X east,
+	 * Y north, Z up); see EmitterProfile.
 	 */
 	private final float windX;
 	private final float windY;
+	private final float windZ;
 	/**
 	 * Fraction of a particle's own velocity shed per second (0 = none); see
 	 * EmitterProfile.
 	 */
 	private final float dragPerSec;
+	/**
+	 * Radial spawn velocity from the emitter centroid, outward (+) / inward (-),
+	 * local units per second; see EmitterProfile.
+	 */
+	private final float vortex;
+	/**
+	 * Emit-point scale about the centroid as a multiplier (1 = unchanged); see
+	 * EmitterProfile.
+	 */
+	private final float emitScale;
 	/**
 	 * Billboard elongation factor along screen velocity (1 = round); see
 	 * EmitterProfile.
@@ -127,7 +138,10 @@ class ParticleStyle
 		this.gravity = profile.getGravity();
 		this.windX = profile.getWindX();
 		this.windY = profile.getWindY();
+		this.windZ = profile.getWindZ();
 		this.dragPerSec = Math.max(0, profile.getDrag()) / 100f;
+		this.vortex = profile.getVortex();
+		this.emitScale = Math.max(0, profile.getEmitScale()) / 100f;
 		this.stretchFactor = 1f + Math.max(0, profile.getStretch()) / 100f;
 		this.stretchRampStart = 1f - Math.max(0, Math.min(100, profile.getStretchRamp())) / 100f;
 		this.baseSize = profile.getSize();

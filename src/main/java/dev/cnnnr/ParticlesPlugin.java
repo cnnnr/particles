@@ -115,6 +115,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		 * line up for feathering and interpolation.
 		 */
 		boolean featherReady;
+		/**
+		 * Centroid of this tick's anchors, computed only when the style needs
+		 * it (emit scale or vortex active). The reference point both effects
+		 * are measured from.
+		 */
+		float cx;
+		float cy;
+		float cz;
 
 		ActiveEmitter(ParticleStyle style, int[] vertices, int[][] chains)
 		{
@@ -1888,6 +1896,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			emitter.carry -= count;
 
 			float lifeScale = moving ? style.getMovementLifetimeScale() : 1f;
+			if (needsCentroid(style))
+			{
+				setCentroid(emitter, pe.anchorXs, pe.anchorYs, pe.anchorZs);
+			}
 			boolean feathered = style.getFeatherStrength() > 0 && emitter.chains != null
 				&& emitter.featherReady;
 			for (int i = 0; i < count; i++)
@@ -1953,7 +1965,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			az = pe.prevZs[a] + (az - pe.prevZs[a]) * t;
 		}
 
-		spawnAt(emitter.style, ax, ay, az, lifeScale);
+		spawnAt(emitter.style, ax, ay, az, emitter.cx, emitter.cy, emitter.cz, lifeScale);
 	}
 
 	/**
@@ -1999,7 +2011,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			z = pz + (z - pz) * timeT;
 		}
 
-		spawnAt(emitter.style, x, y, z, lifeScale);
+		spawnAt(emitter.style, x, y, z, emitter.cx, emitter.cy, emitter.cz, lifeScale);
 	}
 
 	/**
@@ -2158,8 +2170,61 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		recentProjectiles.put(projectileId, new long[]{1, nowMs});
 	}
 
+	/**
+	 * Whether a style's emit scale or vortex is active, so the emitter centroid
+	 * is worth computing this tick.
+	 */
+	private static boolean needsCentroid(ParticleStyle style)
+	{
+		return style.getEmitScale() != 1f || style.getVortex() != 0f;
+	}
+
+	/**
+	 * Store the mean of an emitter's anchors this tick as its centroid, the
+	 * reference point emit scale and vortex are measured from.
+	 */
+	private static void setCentroid(ActiveEmitter emitter, float[] xs, float[] ys, float[] zs)
+	{
+		float sx = 0f;
+		float sy = 0f;
+		float sz = 0f;
+		int start = emitter.anchorStart;
+		int end = start + emitter.anchorCount;
+		for (int a = start; a < end; a++)
+		{
+			sx += xs[a];
+			sy += ys[a];
+			sz += zs[a];
+		}
+		float inv = 1f / emitter.anchorCount;
+		emitter.cx = sx * inv;
+		emitter.cy = sy * inv;
+		emitter.cz = sz * inv;
+	}
+
+	/**
+	 * Spawn with no emitter centroid: emit scale and vortex are measured from a
+	 * centre, so single-point targets (projectiles, spot-anims) that call this
+	 * pass the point itself, making both a no-op.
+	 */
 	private void spawnAt(ParticleStyle style, float ax, float ay, float az, float lifeScale)
 	{
+		spawnAt(style, ax, ay, az, ax, ay, az, lifeScale);
+	}
+
+	private void spawnAt(ParticleStyle style, float ax, float ay, float az,
+		float cx, float cy, float cz, float lifeScale)
+	{
+		// Emit scale: pull the emit point toward the centroid (<1) or push it
+		// out (>1) before spawning, scaling the whole emitter ring in place
+		float emitScale = style.getEmitScale();
+		if (emitScale != 1f)
+		{
+			ax = cx + (ax - cx) * emitScale;
+			ay = cy + (ay - cy) * emitScale;
+			az = cz + (az - cz) * emitScale;
+		}
+
 		// Spawn within a small volume around the point, not at it exactly
 		float jitter = style.getSpawnJitter();
 		double jitterAngle = random.nextFloat() * 2 * Math.PI;
@@ -2173,6 +2238,26 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		float velY = (random.nextFloat() - 0.5f) * spread;
 		// Scene z is negative-up, so rising means decreasing z
 		float velZ = -style.getRiseSpeed() * (0.75f + random.nextFloat() * 0.5f);
+
+		// Vortex: add a radial velocity of constant magnitude from the centroid
+		// through the (scaled) emit point - outward for +, inward for -. Uses
+		// the pre-jitter point so every particle from a vertex shares a clean
+		// radial direction.
+		float vortex = style.getVortex();
+		if (vortex != 0f)
+		{
+			float rx = ax - cx;
+			float ry = ay - cy;
+			float rz = az - cz;
+			float rmag = (float) Math.sqrt(rx * rx + ry * ry + rz * rz);
+			if (rmag > 0.001f)
+			{
+				float scale = vortex / rmag;
+				velX += rx * scale;
+				velY += ry * scale;
+				velZ += rz * scale;
+			}
+		}
 		// Slow sinusoidal drift; amplitude reuses the spread speed
 		float wobblePhase = random.nextFloat() * 2f * (float) Math.PI;
 		float wobbleFreq = 1.5f + random.nextFloat() * 2f;

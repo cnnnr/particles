@@ -124,19 +124,34 @@ class EmitterProfile
 	 */
 	private int gravity = 0;
 	/**
-	 * Steady horizontal wind that carries every particle, in local units per
-	 * second. X is east (+) / west (-), Y is north (+) / south (-). World-
-	 * aligned, so it blows the same compass direction no matter which way the
-	 * wearer faces. Leaning flames, drifting smoke, blowing snow.
+	 * Steady wind that carries every particle, in local units per second. X is
+	 * east (+) / west (-), Y is north (+) / south (-), Z is up (+) / down (-).
+	 * World-aligned, so it blows the same compass direction no matter which way
+	 * the wearer faces. Leaning flames, drifting smoke, blowing snow, updrafts.
 	 */
 	private int windX = 0;
 	private int windY = 0;
+	private int windZ = 0;
 	/**
 	 * Air resistance: each particle sheds this percent of its own velocity per
 	 * second, so rises, spreads, and falls settle over life instead of coasting
 	 * forever (0 = none). Paired with gravity it yields a terminal fall speed.
 	 */
 	private int drag = 0;
+	/**
+	 * Radial velocity away from (+) or toward (-) the emitter's vertex centroid,
+	 * in local units per second (0 = none). Positive blows particles outward
+	 * like a burst; negative sucks them toward the centre like an implosion.
+	 * Applies to vertex-ring emitters; single-point targets have no centre.
+	 */
+	private int vortex = 0;
+	/**
+	 * Scales the emitter's vertices about their centroid before emitting, as a
+	 * percent (100 = unchanged). Below 100 draws the emit points together,
+	 * above 100 pushes them apart - like scaling/fattening vertices in a mesh
+	 * editor. Applies to vertex-ring emitters; no effect on single-point ones.
+	 */
+	private int emitScale = 100;
 	/**
 	 * Elongate the particle this percent along its screen-projected velocity
 	 * (0 = round). Makes fast drops read as falling streaks. Auto-capped so
@@ -258,7 +273,10 @@ class EmitterProfile
 		gravity = other.gravity;
 		windX = other.windX;
 		windY = other.windY;
+		windZ = other.windZ;
 		drag = other.drag;
+		vortex = other.vortex;
+		emitScale = other.emitScale;
 		stretch = other.stretch;
 		stretchRamp = other.stretchRamp;
 		spawnJitter = other.spawnJitter;
