@@ -2178,8 +2178,21 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		float wobbleFreq = 1.5f + random.nextFloat() * 2f;
 		int sizeVariant = random.nextInt(ParticleStyle.SIZE_MULTIPLIERS.length);
 
+		// Per-particle base-size jitter: pick a base in [size-jitter, size+jitter]
+		// (floored at the minimum size), then carry it as a uniform scale so the
+		// auto-variation still applies on top.
+		float sizeScale = 1f;
+		int sizeJitter = style.getSizeJitter();
+		if (sizeJitter > 0)
+		{
+			int base = style.getBaseSize();
+			int offset = random.nextInt(2 * sizeJitter + 1) - sizeJitter;
+			int jitteredBase = Math.max(ParticleStyle.MIN_SIZE, base + offset);
+			sizeScale = jitteredBase / (float) base;
+		}
+
 		Particle p = particleSystem.spawn(x, y, z, velX, velY, velZ,
-			style.getLifetimeSec() * lifeScale, style, sizeVariant, wobblePhase, wobbleFreq, spread);
+			style.getLifetimeSec() * lifeScale, style, sizeVariant, sizeScale, wobblePhase, wobbleFreq, spread);
 		if (p != null)
 		{
 			windowSpawns++;

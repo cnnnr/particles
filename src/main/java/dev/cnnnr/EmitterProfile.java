@@ -93,6 +93,13 @@ class EmitterProfile
 	 * Particle diameter in local units (a tile is 128).
 	 */
 	private int size = 6;
+	/**
+	 * Per-particle random size spread in local units around {@link #size}
+	 * (0 = every particle the base size). Each particle draws a size in
+	 * [size - sizeJitter, size + sizeJitter], floored at 2 (the minimum
+	 * particle size). Realized as the low/base/high pre-baked size variants.
+	 */
+	private int sizeJitter = 0;
 	private int particlesPerSecond = 24;
 	/**
 	 * Particles per tile of emitter movement, spread evenly along each
@@ -228,6 +235,7 @@ class EmitterProfile
 		color = other.color;
 		shape = other.shape;
 		size = other.size;
+		sizeJitter = other.sizeJitter;
 		particlesPerSecond = other.particlesPerSecond;
 		trailDensity = other.trailDensity;
 		lifetimeMs = other.lifetimeMs;

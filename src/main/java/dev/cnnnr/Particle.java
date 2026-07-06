@@ -46,8 +46,15 @@ class Particle
 	@Getter
 	private int sizeVariant;
 
+	/**
+	 * Per-particle uniform size scale from the profile's size jitter (1 = the
+	 * base size), applied on top of the {@link #sizeVariant} auto-variation.
+	 */
+	@Getter
+	private float sizeScale;
+
 	void reset(float x, float y, float z, float velX, float velY, float velZ,
-		float lifetime, ParticleStyle style, int sizeVariant,
+		float lifetime, ParticleStyle style, int sizeVariant, float sizeScale,
 		float wobblePhase, float wobbleFreq, float wobbleAmp)
 	{
 		this.x = x;
@@ -59,6 +66,7 @@ class Particle
 		this.lifetime = lifetime;
 		this.style = style;
 		this.sizeVariant = sizeVariant;
+		this.sizeScale = sizeScale;
 		this.wobblePhase = wobblePhase;
 		this.wobbleFreq = wobbleFreq;
 		this.wobbleAmp = wobbleAmp;

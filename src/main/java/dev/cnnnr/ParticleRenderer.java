@@ -556,6 +556,17 @@ class ParticleRenderer
 		int size = p.getSizeVariant();
 		int fade = fadeStep(p.lifeFraction());
 
+		// Per-particle base-size jitter: a uniform scale on the disc that rides
+		// on top of the pre-baked auto-variation. Capped so growth can't push
+		// the scaled disc out of the bounds volume (the un-jittered variant
+		// already fits); shrinking is always safe.
+		float sizeScale = p.getSizeScale();
+		float variantRadius = style.getBaseSize() * 0.5f * ParticleStyle.SIZE_MULTIPLIERS[size];
+		if (sizeScale > 1f && variantRadius > 1f)
+		{
+			sizeScale = Math.min(sizeScale, Math.max(1f, (CLAMP_MARGIN - 1f) / variantRadius));
+		}
+
 		int vertexBase = slot * templateVertexCount;
 		float dx = p.getX() - canvas.centerLp.getX();
 		float dy = p.getZ() - canvas.centerHeight;
@@ -587,7 +598,7 @@ class ParticleRenderer
 		float dv = 0f;
 		if (stretch > 1f)
 		{
-			float discRadius = style.getBaseSize() * 0.5f * ParticleStyle.SIZE_MULTIPLIERS[size];
+			float discRadius = variantRadius * sizeScale;
 			if (discRadius > 1f)
 			{
 				stretch = Math.min(stretch, Math.max(1f, (CLAMP_MARGIN - 1f) / discRadius));
@@ -626,9 +637,9 @@ class ParticleRenderer
 		float[] sz = sizeTemplate.getVerticesZ();
 		for (int j = 0; j < templateVertexCount; j++)
 		{
-			float x = sx[j];
-			float y = sy[j];
-			float z = sz[j];
+			float x = sx[j] * sizeScale;
+			float y = sy[j] * sizeScale;
+			float z = sz[j] * sizeScale;
 
 			if (stretched)
 			{

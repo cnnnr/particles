@@ -25,7 +25,7 @@ class ParticleSystem
 
 	@Nullable
 	Particle spawn(float x, float y, float z, float velX, float velY, float velZ,
-		float lifetime, ParticleStyle style, int sizeVariant,
+		float lifetime, ParticleStyle style, int sizeVariant, float sizeScale,
 		float wobblePhase, float wobbleFreq, float wobbleAmp)
 	{
 		if (particles.size() >= MAX_PARTICLES)
@@ -38,7 +38,7 @@ class ParticleSystem
 			p = new Particle();
 		}
 		p.reset(x, y, z, velX, velY, velZ,
-			lifetime, style, sizeVariant, wobblePhase, wobbleFreq, wobbleAmp);
+			lifetime, style, sizeVariant, sizeScale, wobblePhase, wobbleFreq, wobbleAmp);
 		particles.add(p);
 		return p;
 	}

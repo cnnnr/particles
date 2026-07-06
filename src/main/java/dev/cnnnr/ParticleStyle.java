@@ -14,10 +14,15 @@ class ParticleStyle
 {
 	static final int FADE_STEPS = 12;
 	/**
-	 * Per-particle random size multipliers; variation makes the cloud read as
-	 * organic instead of uniform beads.
+	 * Per-particle random size multipliers; this fixed spread makes the cloud
+	 * read as organic instead of uniform beads. The profile's size jitter is a
+	 * separate, per-particle scaling of the base that rides on top of these.
 	 */
 	static final float[] SIZE_MULTIPLIERS = {0.65f, 1.0f, 1.4f};
+	/**
+	 * The lowest particle size we allow; also the floor of the jitter range.
+	 */
+	static final int MIN_SIZE = 2;
 
 	/**
 	 * Unlit disc templates indexed [size variant][fade step], facing +z,
@@ -39,6 +44,12 @@ class ParticleStyle
 	private final float trailDensity;
 	private final float riseSpeed;
 	private final float spreadSpeed;
+	/**
+	 * Per-particle random size spread around the base, in local units; 0 = every
+	 * particle the base size. Realized as a per-particle scale at spawn, on top
+	 * of the fixed {@link #SIZE_MULTIPLIERS} auto-variation. See EmitterProfile.
+	 */
+	private final int sizeJitter;
 	/**
 	 * Downward acceleration in local units per second squared; see
 	 * EmitterProfile.
@@ -101,6 +112,7 @@ class ParticleStyle
 		this.trailDensity = profile.getTrailDensity();
 		this.riseSpeed = profile.getRiseSpeed();
 		this.spreadSpeed = profile.getSpreadSpeed();
+		this.sizeJitter = Math.max(0, profile.getSizeJitter());
 		this.gravity = profile.getGravity();
 		this.stretchFactor = 1f + Math.max(0, profile.getStretch()) / 100f;
 		this.stretchRampStart = 1f - Math.max(0, Math.min(100, profile.getStretchRamp())) / 100f;

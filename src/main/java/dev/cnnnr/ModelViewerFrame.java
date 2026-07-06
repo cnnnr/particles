@@ -210,6 +210,7 @@ class ModelViewerFrame extends JFrame
 	private final JComboBox<Shape> shapeCombo = new JComboBox<>(Shape.values());
 	private final JSpinner alphaSpinner = new JSpinner(new SpinnerNumberModel(128, 0, 255, 5));
 	private final JSpinner sizeSpinner = new JSpinner(new SpinnerNumberModel(12, 2, 64, 1));
+	private final JSpinner sizeJitterSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 32, 1));
 	private final JSpinner rateSpinner = new JSpinner(new SpinnerNumberModel(80, 0, 1000, 5));
 	private final JSpinner trailSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 200, 5));
 	private final JSpinner lifetimeSpinner = new JSpinner(new SpinnerNumberModel(2400, 100, 10000, 100));
@@ -611,6 +612,8 @@ class ModelViewerFrame extends JFrame
 		grid.add(alphaSpinner);
 		grid.add(new JLabel("Size"));
 		grid.add(sizeSpinner);
+		grid.add(new JLabel("Size jitter"));
+		grid.add(sizeJitterSpinner);
 		grid.add(new JLabel("Rate /s"));
 		grid.add(rateSpinner);
 		grid.add(new JLabel("Trail / tile"));
@@ -669,6 +672,8 @@ class ModelViewerFrame extends JFrame
 		shapeCombo.setToolTipText("Particle silhouette: a soft glow (Default) or a carved shape - ring, star, teardrop, cross. Reads best at larger sizes.");
 		alphaSpinner.addChangeListener(e -> saveStyle());
 		sizeSpinner.addChangeListener(e -> saveStyle());
+		sizeJitterSpinner.addChangeListener(e -> saveStyle());
+		sizeJitterSpinner.setToolTipText("Random size spread per particle, in the same units as Size. 0 = every particle the base size; higher varies each between Size-jitter and Size+jitter (floored at 2). Realized as three size variants: low, base, high.");
 		rateSpinner.addChangeListener(e -> saveStyle());
 		trailSpinner.addChangeListener(e -> saveStyle());
 		trailSpinner.setToolTipText("Particles per tile of emitter movement, spread evenly along the path - for weapon and projectile trails. Combine with Rate 0 for a pure ribbon.");
@@ -842,6 +847,7 @@ class ModelViewerFrame extends JFrame
 		shapeCombo.setSelectedItem(profile.getShape() == null ? Shape.DEFAULT : profile.getShape());
 		alphaSpinner.setValue(color.getAlpha());
 		sizeSpinner.setValue(profile.getSize());
+		sizeJitterSpinner.setValue(profile.getSizeJitter());
 		rateSpinner.setValue(profile.getParticlesPerSecond());
 		trailSpinner.setValue(profile.getTrailDensity());
 		lifetimeSpinner.setValue(profile.getLifetimeMs());
@@ -908,6 +914,7 @@ class ModelViewerFrame extends JFrame
 		shapeCombo.setEnabled(enabled);
 		alphaSpinner.setEnabled(enabled);
 		sizeSpinner.setEnabled(enabled);
+		sizeJitterSpinner.setEnabled(enabled);
 		rateSpinner.setEnabled(enabled);
 		trailSpinner.setEnabled(enabled);
 		lifetimeSpinner.setEnabled(enabled);
@@ -951,6 +958,7 @@ class ModelViewerFrame extends JFrame
 		profile.setColor(argb);
 		profile.setShape((Shape) shapeCombo.getSelectedItem());
 		profile.setSize((int) sizeSpinner.getValue());
+		profile.setSizeJitter((int) sizeJitterSpinner.getValue());
 		profile.setParticlesPerSecond((int) rateSpinner.getValue());
 		profile.setTrailDensity((int) trailSpinner.getValue());
 		profile.setLifetimeMs((int) lifetimeSpinner.getValue());
