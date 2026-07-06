@@ -271,6 +271,12 @@ class ParticleRenderer
 			spherify(lens, radius);
 			flatten(lens, LENS_FLATTEN);
 
+			// Warp the disc geometry into the profile's silhouette (star,
+			// teardrop, cross) so the shape is real geometry, not a mask on a
+			// round blob; topology is unchanged so the batch system holds
+			Shape shape = profile.getShape() == null ? Shape.DEFAULT : profile.getShape();
+			shapeWarp(lens, radius, shape);
+
 			// Recolor every distinct face color to the style's particle color
 			Set<Short> originals = new HashSet<>();
 			for (short faceColor : lens.getFaceColors())
@@ -282,8 +288,7 @@ class ParticleRenderer
 				lens.recolor(original, target);
 			}
 
-			// Per-face alpha mask carving the profile's shape - the "texture"
-			Shape shape = profile.getShape() == null ? Shape.DEFAULT : profile.getShape();
+			// Per-face alpha: soft glow, and the hollow center for Ring
 			float[] radial = shapeFalloff(lens, radius, shape);
 
 			for (int i = 0; i < ParticleStyle.FADE_STEPS; i++)
@@ -893,41 +898,81 @@ class ParticleRenderer
 		{
 			case RING:
 			{
-				// Bright annulus at ~0.62 radius, hollow center and rim
+				// Hollow center and rim, bright annulus at ~0.62 radius. Ring
+				// stays a mask - geometry can't punch a hole in a filled disc
 				float d = (t - 0.62f) / 0.34f;
 				float a = Math.max(0f, 1f - d * d);
 				return a * a;
 			}
 			case STAR:
-			{
-				// Five soft points: extend the effective radius toward the
-				// point directions so arms reach the rim, valleys fall short
-				float ang = 0.5f + 0.5f * (float) Math.cos(5.0 * Math.atan2(ny, nx));
-				float m = 0.42f + 0.58f * ang * ang;
-				float te = Math.min(1f, t / m);
-				float a = 1f - te * te;
-				return a * a;
-			}
 			case TEARDROP:
-			{
-				// Round bottom pinched to a point at the top (+y up)
-				float k = ny > 0 ? ny : 0f;
-				float horiz = nx / (1f - 0.85f * k);
-				float td = (float) Math.sqrt(horiz * horiz + ny * ny);
-				float a = Math.max(0f, 1f - td * td);
-				return a * a;
-			}
 			case CROSS:
-			{
-				// Two soft perpendicular bars fading to the rim
-				float bx = Math.max(0f, 1f - ny * ny / 0.16f) * Math.max(0f, 1f - nx * nx);
-				float by = Math.max(0f, 1f - nx * nx / 0.16f) * Math.max(0f, 1f - ny * ny);
-				return Math.max(bx, by);
-			}
+				// Geometry carries the silhouette; keep the interior a soft
+				// glow (bright core, dimmer arms) that never fully vanishes so
+				// the warped points stay visible
+				return 0.35f + 0.65f * (1f - t * t);
 			default:
 			{
 				float a = 1f - t * t;
 				return a * a;
+			}
+		}
+	}
+
+	/**
+	 * Reposition the flattened disc's vertices to trace a shape's silhouette
+	 * (star, teardrop, cross). Radial scaling by angle keeps topology intact
+	 * so the batch canvas is unaffected; Default and Ring are left round and
+	 * carved by the alpha mask instead. x is horizontal, y vertical (+y up).
+	 */
+	private static void shapeWarp(ModelData model, float radius, Shape shape)
+	{
+		if (shape == Shape.DEFAULT || shape == Shape.RING || radius <= 0)
+		{
+			return;
+		}
+		float[] xs = model.getVerticesX();
+		float[] ys = model.getVerticesY();
+		int count = model.getVerticesCount();
+		for (int i = 0; i < count; i++)
+		{
+			float x = xs[i];
+			float y = ys[i];
+			float r = (float) Math.sqrt(x * x + y * y);
+			if (r < 0.001f)
+			{
+				continue;
+			}
+			switch (shape)
+			{
+				case STAR:
+				{
+					// Five points: pull the radius in between the peak angles
+					float p = 0.5f + 0.5f * (float) Math.cos(5.0 * Math.atan2(y, x));
+					float f = 0.4f + 0.6f * p;
+					xs[i] = x * f;
+					ys[i] = y * f;
+					break;
+				}
+				case CROSS:
+				{
+					// Four arms on the axes (a plus): peaks at 0/90/180/270
+					float p = 0.5f + 0.5f * (float) Math.cos(4.0 * Math.atan2(y, x));
+					float f = 0.3f + 0.7f * p * p;
+					xs[i] = x * f;
+					ys[i] = y * f;
+					break;
+				}
+				case TEARDROP:
+				{
+					// Round bottom, top narrowed to a point (+y up)
+					float ny = y / radius;
+					float f = ny > 0 ? (float) Math.pow(1f - Math.min(1f, ny), 0.7) : 1f;
+					xs[i] = x * f;
+					break;
+				}
+				default:
+					break;
 			}
 		}
 	}
