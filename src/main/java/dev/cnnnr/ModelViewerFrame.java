@@ -15,6 +15,7 @@ import javax.swing.BorderFactory;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JColorChooser;
 import javax.swing.JComboBox;
 import javax.swing.JFrame;
@@ -207,7 +208,9 @@ class ModelViewerFrame extends JFrame
 
 	// Style editor controls
 	private final JButton colorButton = new JButton();
+	private final JCheckBox colorFadeCheck = new JCheckBox("Fade to end color");
 	private final JButton endColorButton = new JButton();
+	private final JSpinner fadeStartSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 100, 5));
 	private final JComboBox<Shape> shapeCombo = new JComboBox<>(Shape.values());
 	private final JSpinner alphaSpinner = new JSpinner(new SpinnerNumberModel(128, 0, 255, 4));
 	private final JSpinner sizeSpinner = new JSpinner(new SpinnerNumberModel(12, 2, 64, 1));
@@ -613,8 +616,12 @@ class ModelViewerFrame extends JFrame
 		JPanel grid = new JPanel(new GridLayout(0, 2, 4, 4));
 		grid.add(new JLabel("Color"));
 		grid.add(colorButton);
+		grid.add(new JLabel("Color over life"));
+		grid.add(colorFadeCheck);
 		grid.add(new JLabel("End color"));
 		grid.add(endColorButton);
+		grid.add(new JLabel("Fade start %"));
+		grid.add(fadeStartSpinner);
 		grid.add(new JLabel("Shape"));
 		grid.add(shapeCombo);
 		grid.add(new JLabel("Opacity"));
@@ -689,7 +696,15 @@ class ModelViewerFrame extends JFrame
 				saveStyle();
 			}
 		});
-		endColorButton.setToolTipText("Colour at the end of a particle's life. Particles fade from Color to this over their lifetime; set it equal to Color for no fade. Fire cooling, magic settling.");
+		colorFadeCheck.setToolTipText("Fade each particle from Color to the End color over its life. Off = a single constant Color.");
+		colorFadeCheck.addActionListener(e ->
+		{
+			syncColorFadeEnabled();
+			saveStyle();
+		});
+		fadeStartSpinner.setToolTipText("Life percent at which the fade to the End color begins. 0 fades across the whole life; higher holds the start Color longer, then shifts late (e.g. embers reddening near the end).");
+		fadeStartSpinner.addChangeListener(e -> saveStyle());
+		endColorButton.setToolTipText("Colour a particle reaches by the end of its life when Color over life is on. The fade is a hue shift; opacity still follows the life envelope.");
 		endColorButton.addActionListener(e ->
 		{
 			EmitterProfile profile = selectedProfile();
@@ -895,6 +910,8 @@ class ModelViewerFrame extends JFrame
 		colorButton.setBackground(new Color(color.getRed(), color.getGreen(), color.getBlue()));
 		Color endColor = new Color(profile.getColorEnd(), true);
 		endColorButton.setBackground(new Color(endColor.getRed(), endColor.getGreen(), endColor.getBlue()));
+		colorFadeCheck.setSelected(profile.isColorFade());
+		fadeStartSpinner.setValue(profile.getColorFadeStart());
 		shapeCombo.setSelectedItem(profile.getShape() == null ? Shape.DEFAULT : profile.getShape());
 		alphaSpinner.setValue(color.getAlpha());
 		sizeSpinner.setValue(profile.getSize());
@@ -954,6 +971,19 @@ class ModelViewerFrame extends JFrame
 		itemFilterField.setEnabled(!object && !npc && !graphic);
 		wornItemsCombo.setEnabled(!object && !npc && !graphic);
 		addWornItemButton.setEnabled(!object && !npc && !graphic);
+
+		syncColorFadeEnabled();
+	}
+
+	/**
+	 * The end colour and its fade-start only matter while colour-over-life is
+	 * enabled, so they follow the checkbox.
+	 */
+	private void syncColorFadeEnabled()
+	{
+		boolean on = colorFadeCheck.isEnabled() && colorFadeCheck.isSelected();
+		endColorButton.setEnabled(on);
+		fadeStartSpinner.setEnabled(on);
 	}
 
 	private static String joinIds(Set<Integer> ids)
@@ -973,7 +1003,9 @@ class ModelViewerFrame extends JFrame
 	private void setEditorEnabled(boolean enabled)
 	{
 		colorButton.setEnabled(enabled);
+		colorFadeCheck.setEnabled(enabled);
 		endColorButton.setEnabled(enabled);
+		fadeStartSpinner.setEnabled(enabled);
 		shapeCombo.setEnabled(enabled);
 		alphaSpinner.setEnabled(enabled);
 		sizeSpinner.setEnabled(enabled);
@@ -1030,6 +1062,8 @@ class ModelViewerFrame extends JFrame
 		Color endRgb = endColorButton.getBackground();
 		int endArgb = alpha << 24 | (endRgb.getRed() << 16) | (endRgb.getGreen() << 8) | endRgb.getBlue();
 		profile.setColorEnd(endArgb);
+		profile.setColorFade(colorFadeCheck.isSelected());
+		profile.setColorFadeStart((int) fadeStartSpinner.getValue());
 		profile.setShape((Shape) shapeCombo.getSelectedItem());
 		profile.setSize((int) sizeSpinner.getValue());
 		profile.setSizeJitter((int) sizeJitterSpinner.getValue());

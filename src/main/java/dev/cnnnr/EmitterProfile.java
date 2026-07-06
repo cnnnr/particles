@@ -84,12 +84,22 @@ class EmitterProfile
 	 */
 	private int color = 0x96FF981F;
 	/**
-	 * End color as ARGB for colour-over-life: particles fade from {@link #color}
-	 * at spawn to this by death (fire cooling, magic settling). A gradient is
-	 * active only while this differs from the start colour, so matching the two
-	 * means a constant colour. Both RGB and the peak alpha are interpolated.
+	 * Opt-in for colour-over-life. Off by default so a profile is a single
+	 * constant colour unless the author explicitly enables the end colour.
+	 */
+	private boolean colorFade = false;
+	/**
+	 * End color as ARGB for colour-over-life: while {@link #colorFade} is on,
+	 * particles fade from {@link #color} to this by death (fire cooling, magic
+	 * settling). The RGB is interpolated; it shares the start's peak opacity.
 	 */
 	private int colorEnd = 0x96FF981F;
+	/**
+	 * Life percent at which the fade to {@link #colorEnd} begins: the colour
+	 * holds at {@link #color} until here, then ramps to the end by death.
+	 * 0 fades across the whole life; higher delays the shift to late in life.
+	 */
+	private int colorFadeStart = 0;
 	/**
 	 * Particle silhouette, baked as a per-face alpha mask over the shared
 	 * disc geometry. Null on profiles saved before shapes existed, migrated
@@ -269,7 +279,9 @@ class EmitterProfile
 	void copyStyleFrom(EmitterProfile other)
 	{
 		color = other.color;
+		colorFade = other.colorFade;
 		colorEnd = other.colorEnd;
+		colorFadeStart = other.colorFadeStart;
 		shape = other.shape;
 		size = other.size;
 		sizeJitter = other.sizeJitter;

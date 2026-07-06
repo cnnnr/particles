@@ -136,7 +136,7 @@ class ParticleStyle
 		this.litColors1 = litColors1;
 		this.litColors2 = litColors2;
 		this.litColors3 = litColors3;
-		this.colorGradient = profile.getColorEnd() != profile.getColor();
+		this.colorGradient = profile.isColorFade() && profile.getColorEnd() != profile.getColor();
 		this.lifetimeSec = profile.getLifetimeMs() / 1000f;
 		this.particlesPerSecond = profile.getParticlesPerSecond();
 		this.trailDensity = profile.getTrailDensity();

@@ -258,9 +258,14 @@ class ParticleRenderer
 	{
 		int startArgb = profile.getColor();
 		int endArgb = profile.getColorEnd();
-		// Colour over life: interpolate start -> end across the fade steps.
-		// Off when the two match, which keeps the original constant-colour bake.
-		boolean gradient = endArgb != startArgb;
+		// Colour over life: interpolate start -> end across the fade steps. Only
+		// when the author opts in and the colours differ; otherwise the original
+		// constant-colour bake stands.
+		boolean gradient = profile.isColorFade() && endArgb != startArgb;
+		// Hold the start colour until this life fraction, then ramp to the end
+		// by death, so the shift can be delayed to late in a particle's life.
+		float fadeStart = Math.max(0, Math.min(100, profile.getColorFadeStart())) / 100f;
+		float fadeSpan = Math.max(0.001f, 1f - fadeStart);
 
 		ModelData[][] templates = new ModelData[ParticleStyle.SIZE_MULTIPLIERS.length][ParticleStyle.FADE_STEPS];
 		for (int s = 0; s < ParticleStyle.SIZE_MULTIPLIERS.length; s++)
@@ -290,7 +295,8 @@ class ParticleRenderer
 			for (int i = 0; i < ParticleStyle.FADE_STEPS; i++)
 			{
 				float life = (i + 0.5f) / ParticleStyle.FADE_STEPS;
-				int argb = gradient ? lerpArgb(startArgb, endArgb, life) : startArgb;
+				float fade = Math.max(0f, Math.min(1f, (life - fadeStart) / fadeSpan));
+				int argb = gradient ? lerpArgb(startArgb, endArgb, fade) : startArgb;
 				short target = JagexColor.rgbToHSL(argb, 1.0d);
 				int fadeAlpha = (argb >>> 24) & 0xFF;
 				// Soft life envelope: born invisible, bloom mid-life, melt away
