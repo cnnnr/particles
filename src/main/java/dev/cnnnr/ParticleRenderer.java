@@ -894,10 +894,10 @@ class ParticleRenderer
 
 	private static float maskValue(Shape shape, float nx, float ny, float t)
 	{
-		if (shape == Shape.STAR || shape == Shape.DIAMOND)
+		if (shape == Shape.DIAMOND)
 		{
 			// Geometry carries the silhouette; keep the interior a soft glow
-			// (bright core, dimmer arms) that never fully vanishes so the
+			// (bright core, dimmer points) that never fully vanishes so the
 			// warped points stay visible
 			return 0.35f + 0.65f * (1f - t * t);
 		}
@@ -906,28 +906,17 @@ class ParticleRenderer
 	}
 
 	/**
-	 * Reposition the flattened disc's vertices to trace a shape's silhouette
-	 * by scaling each vertex's radius by a function of its angle - a diamond
-	 * is four points on the axes, a star is eight (two diamonds crossed).
-	 * Topology is unchanged so the batch canvas is unaffected; Default is left
-	 * round. x is horizontal, y vertical.
+	 * Reposition the flattened disc's vertices into a four-point diamond by
+	 * scaling each vertex's radius by a function of its angle (peaks on the
+	 * axes). Topology is unchanged so the batch canvas is unaffected; Default
+	 * is left round. x is horizontal, y vertical.
 	 */
 	private static void shapeWarp(ModelData model, float radius, Shape shape)
 	{
-		int points;
-		if (shape == Shape.DIAMOND)
-		{
-			points = 4;
-		}
-		else if (shape == Shape.STAR)
-		{
-			points = 8;
-		}
-		else
+		if (shape != Shape.DIAMOND)
 		{
 			return;
 		}
-
 		float[] xs = model.getVerticesX();
 		float[] ys = model.getVerticesY();
 		int count = model.getVerticesCount();
@@ -939,8 +928,8 @@ class ParticleRenderer
 			{
 				continue;
 			}
-			// Peaks at every 360/points degrees; square sharpens the points
-			float p = 0.5f + 0.5f * (float) Math.cos(points * Math.atan2(y, x));
+			// Four peaks on the axes; square sharpens the points
+			float p = 0.5f + 0.5f * (float) Math.cos(4.0 * Math.atan2(y, x));
 			float f = 0.3f + 0.7f * p * p;
 			xs[i] = x * f;
 			ys[i] = y * f;
