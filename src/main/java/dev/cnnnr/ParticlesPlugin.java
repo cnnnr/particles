@@ -553,7 +553,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		overlayManager.add(overlay);
 
 		panel = new ParticlesPanel(developerMode, this::openViewer, store::setEnabled, store::setWip,
-			store::setEnabledAll, store::pasteStyle, store::delete, this::renameProfile, this::editProfile);
+			store::setEnabledMany, store::pasteStyle, store::delete, this::renameProfile, this::editProfile,
+			new ParticlesPanel.FolderActions(store::setFolderEnabled, store::setFolderWip, this::renameFolder,
+				store::dissolveFolder, store::removeFromFolder, store::createFolder, store::addToFolder));
 		navButton = NavigationButton.builder()
 			.tooltip("Particles")
 			.icon(createIcon())
@@ -1724,7 +1726,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		pe.rebuilt = true;
 
 		Set<Integer> wornItemIds = wornItemIds(composition);
-		Map<String, EmitterProfile> profiles = store.snapshotAll();
+		EmitterStore.Snapshot snap = store.snapshot();
+		Map<String, EmitterProfile> profiles = snap.profiles;
+		Map<String, ProfileFolder> folders = snap.folders;
 		ModelSnapshot snapshot = ModelSnapshot.capture(model);
 
 		pe.emitters.clear();
@@ -1741,9 +1745,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				EmitterProfile profile = entry.getValue();
 				if (!EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType())
 					|| !piece.matchesSignature(profile.getSignature())
-					|| !profile.isEnabled()
+					|| !ParticlesPanel.effectiveEnabled(profile, folders)
 					|| profile.getVertices().isEmpty()
-					|| (!developerMode && ParticlesPanel.Category.isWip(profile)))
+					|| (!developerMode && ParticlesPanel.effectiveWip(profile, folders)))
 				{
 					continue;
 				}
@@ -1794,8 +1798,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
 		{
 			EmitterProfile profile = entry.getValue();
-			if (!profile.isProjectileTarget() || !profile.isEnabled() || profile.getProjectileId() < 0
-				|| (!developerMode && ParticlesPanel.Category.isWip(profile)))
+			if (!profile.isProjectileTarget() || !ParticlesPanel.effectiveEnabled(profile, folders)
+				|| profile.getProjectileId() < 0
+				|| (!developerMode && ParticlesPanel.effectiveWip(profile, folders)))
 			{
 				continue;
 			}
@@ -2608,7 +2613,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	{
 		oe.revision = revision;
 		oe.emitters.clear();
-		Map<String, EmitterProfile> profiles = store.snapshotAll();
+		EmitterStore.Snapshot snap = store.snapshot();
+		Map<String, EmitterProfile> profiles = snap.profiles;
+		Map<String, ProfileFolder> folders = snap.folders;
 		Model model = objectModel(object);
 		if (model == null)
 		{
@@ -2620,8 +2627,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		{
 			EmitterProfile profile = entry.getValue();
 			if (!profile.isObjectTarget() || profile.getObjectId() != object.getId()
-				|| !profile.isEnabled() || profile.getVertices().isEmpty()
-				|| (!developerMode && ParticlesPanel.Category.isWip(profile)))
+				|| !ParticlesPanel.effectiveEnabled(profile, folders) || profile.getVertices().isEmpty()
+				|| (!developerMode && ParticlesPanel.effectiveWip(profile, folders)))
 			{
 				continue;
 			}
@@ -3071,11 +3078,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	private void rebuildGraphicStyles()
 	{
 		graphicEmitters.clear();
-		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
+		EmitterStore.Snapshot snap = store.snapshot();
+		Map<String, ProfileFolder> folders = snap.folders;
+		for (Map.Entry<String, EmitterProfile> entry : snap.profiles.entrySet())
 		{
 			EmitterProfile profile = entry.getValue();
-			if (!profile.isGraphicTarget() || profile.getGraphicId() < 0 || !profile.isEnabled()
-				|| (!developerMode && ParticlesPanel.Category.isWip(profile)))
+			if (!profile.isGraphicTarget() || profile.getGraphicId() < 0
+				|| !ParticlesPanel.effectiveEnabled(profile, folders)
+				|| (!developerMode && ParticlesPanel.effectiveWip(profile, folders)))
 			{
 				continue;
 			}
@@ -3443,12 +3453,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			return;
 		}
 		ModelSnapshot snapshot = ModelSnapshot.capture(model);
-		for (Map.Entry<String, EmitterProfile> entry : store.snapshotAll().entrySet())
+		EmitterStore.Snapshot snap = store.snapshot();
+		Map<String, ProfileFolder> folders = snap.folders;
+		for (Map.Entry<String, EmitterProfile> entry : snap.profiles.entrySet())
 		{
 			EmitterProfile profile = entry.getValue();
 			if (!profile.isNpcTarget() || profile.getNpcId() != npc.getId()
-				|| !profile.isEnabled() || profile.getVertices().isEmpty()
-				|| (!developerMode && ParticlesPanel.Category.isWip(profile)))
+				|| !ParticlesPanel.effectiveEnabled(profile, folders) || profile.getVertices().isEmpty()
+				|| (!developerMode && ParticlesPanel.effectiveWip(profile, folders)))
 			{
 				continue;
 			}
@@ -4798,13 +4810,29 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		}
 	}
 
+	private void renameFolder(String folderId)
+	{
+		ProfileFolder folder = store.snapshot().folders.get(folderId);
+		if (folder == null)
+		{
+			return;
+		}
+		String name = javax.swing.JOptionPane.showInputDialog(panel,
+			"Name for this folder:", folder.getName());
+		if (name != null)
+		{
+			store.renameFolder(folderId, name);
+		}
+	}
+
 	private void refreshPanel()
 	{
+		EmitterStore.Snapshot snap = store.snapshot();
 		SwingUtilities.invokeLater(() ->
 		{
 			if (panel != null)
 			{
-				panel.rebuild(store.snapshotAll(), presentSignatures);
+				panel.rebuild(snap.profiles, snap.folders, presentSignatures);
 			}
 		});
 	}

@@ -60,6 +60,12 @@ class EmitterProfile
 	 * ship normally without a migration.
 	 */
 	private boolean wip = false;
+	/**
+	 * Id of the {@link ProfileFolder} this profile belongs to, or null when
+	 * ungrouped. Folder membership; the folder's own settings live on the
+	 * folder. Absent in old configs deserializes to null (ungrouped).
+	 */
+	private String folderId = null;
 	private Set<Integer> vertices = new HashSet<>();
 	/**
 	 * Item IDs gating this profile: only active while one of these items is
@@ -256,6 +262,7 @@ class EmitterProfile
 		c.signature = signature;
 		c.enabled = enabled;
 		c.wip = wip;
+		c.folderId = folderId;
 		c.vertices = new HashSet<>(vertices);
 		c.copyStyleFrom(this);
 		return c;

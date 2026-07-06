@@ -7,8 +7,10 @@ import java.io.InputStream;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import javax.annotation.Nullable;
 import lombok.Setter;
@@ -29,9 +31,30 @@ import net.runelite.client.config.ConfigManager;
 class EmitterStore
 {
 	private static final String CONFIG_KEY = "pieceProfiles";
+	private static final String FOLDERS_KEY = "pieceFolders";
 	private static final Type MAP_TYPE = new TypeToken<Map<String, EmitterProfile>>()
 	{
 	}.getType();
+	private static final Type FOLDERS_TYPE = new TypeToken<Map<String, ProfileFolder>>()
+	{
+	}.getType();
+
+	/**
+	 * A consistent (profiles, folders) pair - both the merged result and the
+	 * atomic read snapshot the emission gates and sidebar resolve against, so a
+	 * profile is never scored against a folder map from a different instant.
+	 */
+	static final class Snapshot
+	{
+		final Map<String, EmitterProfile> profiles;
+		final Map<String, ProfileFolder> folders;
+
+		Snapshot(Map<String, EmitterProfile> profiles, Map<String, ProfileFolder> folders)
+		{
+			this.profiles = profiles;
+			this.folders = folders;
+		}
+	}
 
 	private final ConfigManager configManager;
 	private final Gson gson;
@@ -43,6 +66,7 @@ class EmitterStore
 	 */
 	private final boolean developerMode;
 	private final Map<String, EmitterProfile> profiles = new LinkedHashMap<>();
+	private final Map<String, ProfileFolder> folders = new LinkedHashMap<>();
 	private int revision;
 
 	/**
@@ -61,8 +85,12 @@ class EmitterStore
 	synchronized void load()
 	{
 		profiles.clear();
-		profiles.putAll(mergeWithBundle(
-			configManager.getConfiguration(ParticlesConfig.GROUP, CONFIG_KEY)));
+		folders.clear();
+		Snapshot merged = mergeAll(
+			configManager.getConfiguration(ParticlesConfig.GROUP, CONFIG_KEY),
+			configManager.getConfiguration(ParticlesConfig.GROUP, FOLDERS_KEY));
+		profiles.putAll(merged.profiles);
+		folders.putAll(merged.folders);
 	}
 
 	/**
@@ -82,7 +110,18 @@ class EmitterStore
 	 */
 	Map<String, EmitterProfile> mergeWithBundle(@Nullable String savedJson)
 	{
-		Map<String, EmitterProfile> saved = parse(savedJson);
+		return mergeAll(savedJson, null).profiles;
+	}
+
+	/**
+	 * Merge profiles and folders together and reconcile them: nulls any
+	 * folderId that no longer resolves and dissolves folders left with fewer
+	 * than two members, so the returned pair always satisfies the folder
+	 * invariant. Package-private for testing.
+	 */
+	Snapshot mergeAll(@Nullable String savedProfilesJson, @Nullable String savedFoldersJson)
+	{
+		Map<String, EmitterProfile> saved = parse(savedProfilesJson);
 		Map<String, EmitterProfile> bundled = parse(loadBundledPresets());
 
 		Map<String, EmitterProfile> result = new LinkedHashMap<>();
@@ -104,9 +143,11 @@ class EmitterStore
 				bundled.forEach((key, profile) ->
 				{
 					EmitterProfile prior = saved == null ? null : saved.get(key);
-					if (prior != null)
+					// Content from the bundle; the user's toggle carries over only
+					// for profiles the bundle keeps ungrouped - foldered children
+					// are dev-controlled (users toggle the folder, not the child).
+					if (prior != null && profile.getFolderId() == null)
 					{
-						// Content from the bundle, toggle from the user
 						profile.setEnabled(prior.isEnabled());
 					}
 					result.put(key, profile);
@@ -179,7 +220,89 @@ class EmitterStore
 				profile.setColorEnd(profile.getColor());
 			}
 		});
+
+		Map<String, ProfileFolder> folderResult = mergeFolders(savedFoldersJson);
+		reconcileFolders(result, folderResult);
+		return new Snapshot(result, folderResult);
+	}
+
+	/**
+	 * Merge saved folders with the bundle on the same terms as profiles:
+	 * dev mode's config wins; shipped users take folder content from the bundle
+	 * and keep only their own enable toggle.
+	 */
+	private Map<String, ProfileFolder> mergeFolders(@Nullable String savedFoldersJson)
+	{
+		Map<String, ProfileFolder> saved = parseFolders(savedFoldersJson);
+		Map<String, ProfileFolder> bundled = parseFolders(loadBundledFolders());
+
+		Map<String, ProfileFolder> result = new LinkedHashMap<>();
+		if (developerMode)
+		{
+			if (saved != null && !saved.isEmpty())
+			{
+				result.putAll(saved);
+			}
+			else if (bundled != null)
+			{
+				result.putAll(bundled);
+			}
+		}
+		else
+		{
+			if (bundled != null)
+			{
+				bundled.forEach((id, folder) ->
+				{
+					ProfileFolder prior = saved == null ? null : saved.get(id);
+					if (prior != null)
+					{
+						// Content (name, wip) from the bundle, toggle from the user
+						folder.setEnabled(prior.isEnabled());
+					}
+					result.put(id, folder);
+				});
+			}
+			if (saved != null)
+			{
+				saved.forEach(result::putIfAbsent);
+			}
+		}
 		return result;
+	}
+
+	/**
+	 * Enforce the folder invariant on a merged pair: null any folderId with no
+	 * matching folder, then drop any folder left with fewer than two members
+	 * (nulling those members). Runs in both modes; defensive in dev mode where
+	 * the mutators already hold the invariant.
+	 */
+	private static void reconcileFolders(Map<String, EmitterProfile> profiles,
+		Map<String, ProfileFolder> folders)
+	{
+		for (EmitterProfile profile : profiles.values())
+		{
+			if (profile.getFolderId() != null && !folders.containsKey(profile.getFolderId()))
+			{
+				profile.setFolderId(null);
+			}
+		}
+		Map<String, Integer> counts = new HashMap<>();
+		for (EmitterProfile profile : profiles.values())
+		{
+			if (profile.getFolderId() != null)
+			{
+				counts.merge(profile.getFolderId(), 1, Integer::sum);
+			}
+		}
+		folders.keySet().removeIf(id -> counts.getOrDefault(id, 0) < 2);
+		for (EmitterProfile profile : profiles.values())
+		{
+			if (profile.getFolderId() != null && !folders.containsKey(profile.getFolderId()))
+			{
+				profile.setFolderId(null);
+			}
+		}
 	}
 
 	/**
@@ -204,9 +327,39 @@ class EmitterStore
 	}
 
 	@Nullable
+	private Map<String, ProfileFolder> parseFolders(@Nullable String json)
+	{
+		if (json == null || json.isEmpty())
+		{
+			return null;
+		}
+		try
+		{
+			return gson.fromJson(json, FOLDERS_TYPE);
+		}
+		catch (Exception e)
+		{
+			log.warn("Failed to parse profile folders", e);
+			return null;
+		}
+	}
+
+	@Nullable
 	private static String loadBundledPresets()
 	{
-		try (InputStream in = EmitterStore.class.getResourceAsStream("/presets.json"))
+		return loadResource("/presets.json", "presets");
+	}
+
+	@Nullable
+	private static String loadBundledFolders()
+	{
+		return loadResource("/folders.json", "folders");
+	}
+
+	@Nullable
+	private static String loadResource(String path, String what)
+	{
+		try (InputStream in = EmitterStore.class.getResourceAsStream(path))
 		{
 			if (in == null)
 			{
@@ -216,7 +369,7 @@ class EmitterStore
 		}
 		catch (IOException e)
 		{
-			log.warn("Failed to read bundled presets", e);
+			log.warn("Failed to read bundled {}", what, e);
 			return null;
 		}
 	}
@@ -224,6 +377,7 @@ class EmitterStore
 	private void save()
 	{
 		configManager.setConfiguration(ParticlesConfig.GROUP, CONFIG_KEY, gson.toJson(profiles, MAP_TYPE));
+		configManager.setConfiguration(ParticlesConfig.GROUP, FOLDERS_KEY, gson.toJson(folders, FOLDERS_TYPE));
 		revision++;
 		if (changeListener != null)
 		{
@@ -558,27 +712,6 @@ class EmitterStore
 	}
 
 	/**
-	 * Flip a set of profiles at once with a single config write.
-	 */
-	synchronized void setEnabledAll(Collection<String> profileKeys, boolean enabled)
-	{
-		boolean changed = false;
-		for (String profileKey : profileKeys)
-		{
-			EmitterProfile profile = profiles.get(profileKey);
-			if (profile != null && profile.isEnabled() != enabled)
-			{
-				profile.setEnabled(enabled);
-				changed = true;
-			}
-		}
-		if (changed)
-		{
-			save();
-		}
-	}
-
-	/**
 	 * Overwrite a profile's editable style with another profile's, for the
 	 * sidebar copy/paste flow.
 	 */
@@ -594,20 +727,250 @@ class EmitterStore
 
 	synchronized void delete(String profileKey)
 	{
-		if (profiles.remove(profileKey) != null)
+		EmitterProfile removed = profiles.remove(profileKey);
+		if (removed != null)
 		{
+			if (removed.getFolderId() != null)
+			{
+				autoDissolve(removed.getFolderId());
+			}
 			save();
 		}
 	}
 
 	/**
-	 * @return a deep copy of all profiles by key, for UI rendering and
-	 * emitter resolution
+	 * @return a deep copy of all profiles by key, for the non-gating lookups
+	 * (rename/edit dialogs, worn-model scans) that only need profiles
 	 */
 	synchronized Map<String, EmitterProfile> snapshotAll()
 	{
 		Map<String, EmitterProfile> copy = new LinkedHashMap<>();
 		profiles.forEach((k, v) -> copy.put(k, v.copy()));
 		return copy;
+	}
+
+	/**
+	 * @return an atomic deep copy of both maps, for the emission gates and the
+	 * sidebar - so a profile is always scored against a coherent folder view
+	 */
+	synchronized Snapshot snapshot()
+	{
+		Map<String, EmitterProfile> p = new LinkedHashMap<>();
+		profiles.forEach((k, v) -> p.put(k, v.copy()));
+		Map<String, ProfileFolder> f = new LinkedHashMap<>();
+		folders.forEach((k, v) -> f.put(k, v.copy()));
+		return new Snapshot(p, f);
+	}
+
+	// --- Folders -------------------------------------------------------------
+
+	/**
+	 * Group two profiles: if the target is already in a folder the member joins
+	 * it, otherwise a new folder is created named after the target. Rejects a
+	 * cross-category or self grouping. The member leaves any prior folder.
+	 */
+	synchronized void createFolder(String targetKey, String memberKey)
+	{
+		EmitterProfile target = profiles.get(targetKey);
+		EmitterProfile member = profiles.get(memberKey);
+		if (target == null || member == null || targetKey.equals(memberKey)
+			|| !sameCategory(target, member))
+		{
+			return;
+		}
+		String folderId = target.getFolderId();
+		if (folderId == null)
+		{
+			folderId = freeFolderId();
+			folders.put(folderId, new ProfileFolder(folderId, target.getName()));
+			target.setFolderId(folderId);
+		}
+		moveToFolder(member, folderId);
+		save();
+	}
+
+	/**
+	 * Add a profile to an existing folder (dropping onto its header or a child),
+	 * rejecting a cross-category join. The member leaves any prior folder.
+	 */
+	synchronized void addToFolder(String folderId, String memberKey)
+	{
+		ProfileFolder folder = folders.get(folderId);
+		EmitterProfile member = profiles.get(memberKey);
+		if (folder == null || member == null || folderId.equals(member.getFolderId()))
+		{
+			return;
+		}
+		EmitterProfile reference = anyMember(folderId);
+		if (reference != null && !sameCategory(reference, member))
+		{
+			return;
+		}
+		moveToFolder(member, folderId);
+		save();
+	}
+
+	/**
+	 * Orphan one profile back to a loose row; dissolves the folder if it falls
+	 * below two members.
+	 */
+	synchronized void removeFromFolder(String profileKey)
+	{
+		EmitterProfile profile = profiles.get(profileKey);
+		if (profile == null || profile.getFolderId() == null)
+		{
+			return;
+		}
+		String folderId = profile.getFolderId();
+		profile.setFolderId(null);
+		autoDissolve(folderId);
+		save();
+	}
+
+	/**
+	 * Remove a folder, orphaning every member back to a loose row.
+	 */
+	synchronized void dissolveFolder(String folderId)
+	{
+		if (folders.remove(folderId) == null)
+		{
+			return;
+		}
+		for (EmitterProfile profile : profiles.values())
+		{
+			if (folderId.equals(profile.getFolderId()))
+			{
+				profile.setFolderId(null);
+			}
+		}
+		save();
+	}
+
+	synchronized void setFolderEnabled(String folderId, boolean enabled)
+	{
+		ProfileFolder folder = folders.get(folderId);
+		if (folder != null && folder.isEnabled() != enabled)
+		{
+			folder.setEnabled(enabled);
+			save();
+		}
+	}
+
+	synchronized void setFolderWip(String folderId, boolean wip)
+	{
+		ProfileFolder folder = folders.get(folderId);
+		if (folder != null && folder.isWip() != wip)
+		{
+			folder.setWip(wip);
+			save();
+		}
+	}
+
+	synchronized void renameFolder(String folderId, String name)
+	{
+		ProfileFolder folder = folders.get(folderId);
+		if (folder != null && name != null && !name.trim().isEmpty())
+		{
+			folder.setName(name.trim());
+			save();
+		}
+	}
+
+	/**
+	 * Bulk enable/disable the rendered rows in one write: folder preferences for
+	 * folders and profile toggles for loose profiles. Foldered children are
+	 * never touched - users control the folder, not the child.
+	 */
+	synchronized void setEnabledMany(Collection<String> looseProfileKeys,
+		Collection<String> folderIds, boolean enabled)
+	{
+		boolean changed = false;
+		for (String key : looseProfileKeys)
+		{
+			EmitterProfile profile = profiles.get(key);
+			if (profile != null && profile.isEnabled() != enabled)
+			{
+				profile.setEnabled(enabled);
+				changed = true;
+			}
+		}
+		for (String id : folderIds)
+		{
+			ProfileFolder folder = folders.get(id);
+			if (folder != null && folder.isEnabled() != enabled)
+			{
+				folder.setEnabled(enabled);
+				changed = true;
+			}
+		}
+		if (changed)
+		{
+			save();
+		}
+	}
+
+	private void moveToFolder(EmitterProfile member, String folderId)
+	{
+		String old = member.getFolderId();
+		member.setFolderId(folderId);
+		if (old != null && !old.equals(folderId))
+		{
+			autoDissolve(old);
+		}
+	}
+
+	/**
+	 * Dissolve a folder that has dropped below two members, orphaning any lone
+	 * remaining member. Mutates without saving; the caller persists.
+	 */
+	private void autoDissolve(String folderId)
+	{
+		int count = 0;
+		for (EmitterProfile profile : profiles.values())
+		{
+			if (folderId.equals(profile.getFolderId()))
+			{
+				count++;
+			}
+		}
+		if (count < 2)
+		{
+			folders.remove(folderId);
+			for (EmitterProfile profile : profiles.values())
+			{
+				if (folderId.equals(profile.getFolderId()))
+				{
+					profile.setFolderId(null);
+				}
+			}
+		}
+	}
+
+	@Nullable
+	private EmitterProfile anyMember(String folderId)
+	{
+		for (EmitterProfile profile : profiles.values())
+		{
+			if (folderId.equals(profile.getFolderId()))
+			{
+				return profile;
+			}
+		}
+		return null;
+	}
+
+	private static boolean sameCategory(EmitterProfile a, EmitterProfile b)
+	{
+		return Objects.equals(a.getTargetType(), b.getTargetType());
+	}
+
+	private String freeFolderId()
+	{
+		int n = 1;
+		while (folders.containsKey("folder:" + n))
+		{
+			n++;
+		}
+		return "folder:" + n;
 	}
 }

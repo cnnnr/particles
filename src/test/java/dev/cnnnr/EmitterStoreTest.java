@@ -5,6 +5,7 @@ import java.util.Map;
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -84,5 +85,60 @@ public class EmitterStoreTest
 	{
 		assertTrue("empty dev config still seeds the bundle",
 			store(true).mergeWithBundle(null).size() > 10);
+	}
+
+	// --- Folders -------------------------------------------------------------
+
+	private String profileIn(String key, String folderId)
+	{
+		return "\"" + key + "\":{\"name\":\"" + key + "\",\"targetType\":\"player\","
+			+ "\"enabled\":true,\"signature\":\"sig\",\"vertices\":[1],\"movementLifetime\":100"
+			+ (folderId == null ? "" : ",\"folderId\":\"" + folderId + "\"") + "}";
+	}
+
+	private String folder(String id, boolean enabled)
+	{
+		return "\"" + id + "\":{\"id\":\"" + id + "\",\"name\":\"" + id + "\",\"enabled\":"
+			+ enabled + ",\"wip\":false}";
+	}
+
+	@Test
+	public void folderWithTwoMembersSurvives()
+	{
+		EmitterStore.Snapshot snap = store(false).mergeAll(
+			"{" + profileIn("a", "folder:1") + "," + profileIn("b", "folder:1") + "}",
+			"{" + folder("folder:1", true) + "}");
+		assertTrue("two-member folder survives", snap.folders.containsKey("folder:1"));
+		assertEquals("folder:1", snap.profiles.get("a").getFolderId());
+		assertEquals("folder:1", snap.profiles.get("b").getFolderId());
+	}
+
+	@Test
+	public void loneMemberFolderIsPruned()
+	{
+		EmitterStore.Snapshot snap = store(false).mergeAll(
+			"{" + profileIn("a", "folder:1") + "}",
+			"{" + folder("folder:1", true) + "}");
+		assertFalse("folder below two members is dropped", snap.folders.containsKey("folder:1"));
+		assertNull("orphaned member's folderId is nulled", snap.profiles.get("a").getFolderId());
+	}
+
+	@Test
+	public void danglingFolderIdIsNulled()
+	{
+		EmitterStore.Snapshot snap = store(false).mergeAll(
+			"{" + profileIn("a", "folder:ghost") + "," + profileIn("b", "folder:ghost") + "}", null);
+		assertNull(snap.profiles.get("a").getFolderId());
+		assertNull(snap.profiles.get("b").getFolderId());
+	}
+
+	@Test
+	public void developerModeKeepsSavedFolders()
+	{
+		EmitterStore.Snapshot snap = store(true).mergeAll(
+			"{" + profileIn("a", "folder:1") + "," + profileIn("b", "folder:1") + "}",
+			"{" + folder("folder:1", false) + "}");
+		assertTrue(snap.folders.containsKey("folder:1"));
+		assertFalse("dev config folder toggle is preserved", snap.folders.get("folder:1").isEnabled());
 	}
 }

@@ -10,6 +10,7 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -30,11 +31,14 @@ import javax.swing.Icon;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
+import javax.swing.border.Border;
 import javax.swing.event.PopupMenuEvent;
 import javax.swing.event.PopupMenuListener;
 import javax.swing.event.DocumentEvent;
@@ -49,9 +53,11 @@ import net.runelite.client.util.LinkBrowser;
 
 /**
  * Sidebar panel: lists saved emitter profiles with search and category
- * filters. Authoring controls (vertex picker, edit/rename/delete) only
- * appear in developer mode; end users see read-only presets with
- * enable/disable toggles.
+ * filters. Related profiles can be grouped into collapsible folders; end users
+ * see and toggle a folder as one row, while developers expand it to edit its
+ * members. Authoring controls (vertex picker, edit/rename/delete, folder
+ * drag-and-drop) only appear in developer mode; end users see read-only presets
+ * with enable/disable toggles.
  */
 class ParticlesPanel extends PluginPanel
 {
@@ -110,6 +116,15 @@ class ParticlesPanel extends PluginPanel
 			{
 				return true;
 			}
+			return categoryWip(profile);
+		}
+
+		/**
+		 * True when the profile's category (not the profile itself) is WIP -
+		 * used to hide a whole folder for shipped users.
+		 */
+		static boolean categoryWip(EmitterProfile profile)
+		{
 			for (Category value : values())
 			{
 				if (value.wip && value.matches(profile))
@@ -122,25 +137,122 @@ class ParticlesPanel extends PluginPanel
 	}
 
 	/**
+	 * A profile's effective enabled state, folding in its folder's preference
+	 * (the folder gates every member). Static and pure over an explicit folders
+	 * map so it runs against an atomic snapshot without tearing against live
+	 * store state.
+	 */
+	static boolean effectiveEnabled(EmitterProfile profile, Map<String, ProfileFolder> folders)
+	{
+		if (!profile.isEnabled())
+		{
+			return false;
+		}
+		String folderId = profile.getFolderId();
+		if (folderId == null)
+		{
+			return true;
+		}
+		ProfileFolder folder = folders.get(folderId);
+		return folder == null || folder.isEnabled();
+	}
+
+	/**
+	 * A profile's effective WIP state: its own or its category's WIP, plus its
+	 * folder's WIP (which hides the whole group for shipped users).
+	 */
+	static boolean effectiveWip(EmitterProfile profile, Map<String, ProfileFolder> folders)
+	{
+		if (Category.isWip(profile))
+		{
+			return true;
+		}
+		String folderId = profile.getFolderId();
+		if (folderId == null)
+		{
+			return false;
+		}
+		ProfileFolder folder = folders.get(folderId);
+		return folder != null && folder.isWip();
+	}
+
+	/**
+	 * The folder mutations the sidebar fires, bundled so the constructor stays
+	 * readable. create groups two loose profiles; addMember joins an existing
+	 * folder; removeMember orphans one child; the rest map to the folder's own
+	 * settings.
+	 */
+	static final class FolderActions
+	{
+		final BiConsumer<String, Boolean> toggleEnabled;
+		final BiConsumer<String, Boolean> toggleWip;
+		final Consumer<String> rename;
+		final Consumer<String> dissolve;
+		final Consumer<String> removeMember;
+		final BiConsumer<String, String> create;
+		final BiConsumer<String, String> addMember;
+
+		FolderActions(BiConsumer<String, Boolean> toggleEnabled, BiConsumer<String, Boolean> toggleWip,
+			Consumer<String> rename, Consumer<String> dissolve, Consumer<String> removeMember,
+			BiConsumer<String, String> create, BiConsumer<String, String> addMember)
+		{
+			this.toggleEnabled = toggleEnabled;
+			this.toggleWip = toggleWip;
+			this.rename = rename;
+			this.dissolve = dissolve;
+			this.removeMember = removeMember;
+			this.create = create;
+			this.addMember = addMember;
+		}
+	}
+
+	/**
+	 * Bulk enable/disable over the rendered rows: loose profile keys and folder
+	 * ids handled separately (foldered children are never touched).
+	 */
+	interface BulkToggle
+	{
+		void accept(Set<String> looseKeys, Set<String> folderIds, boolean enabled);
+	}
+
+	/**
 	 * Dev-only ship/WIP mark icons: a red check for shipped, an empty box for
 	 * work-in-progress. Drawn so the check is red regardless of the theme.
 	 */
 	private static final Icon PUBLISHED_ICON = markIcon(true);
 	private static final Icon WIP_ICON = markIcon(false);
 
+	// Client-property keys stashed on rows so a drop reads identity off the
+	// live component under the cursor, never a stale rebuilt row reference.
+	private static final String DRAG_KEY = "particles.dragKey";
+	private static final String DRAG_CAT = "particles.dragCat";
+	private static final String DROP_KIND = "particles.dropKind";
+	private static final String DROP_KEY = "particles.dropKey";
+	private static final String DROP_CAT = "particles.dropCat";
+	private static final String DROP_FOLDER = "particles.dropFolder";
+	private static final int DRAG_THRESHOLD = 5;
+
 	private final boolean developerMode;
 	private final BiConsumer<String, Boolean> onToggleProfile;
 	private final BiConsumer<String, Boolean> onToggleWip;
+	private final BulkToggle onToggleMany;
 	private final BiConsumer<String, EmitterProfile> onPasteStyle;
 	private final Consumer<String> onDeleteProfile;
 	private final Consumer<String> onRenameProfile;
 	private final Consumer<String> onEditProfile;
+	private final FolderActions folderActions;
 	private final JPanel profileList = new JPanel();
 	private final IconTextField searchBar = new IconTextField();
 
 	private Category category = Category.ALL;
 	private Map<String, EmitterProfile> profiles = Map.of();
+	private Map<String, ProfileFolder> folders = Map.of();
 	private Set<String> presentSignatures = Set.of();
+	/**
+	 * Folder ids the developer has expanded; kept across re-renders so editing
+	 * a child doesn't collapse the folder.
+	 */
+	private final Set<String> expanded = new HashSet<>();
 	/**
 	 * Style clipboard for the right-click copy/paste flow; a detached copy
 	 * so later edits or deletion of the source don't change what pastes.
@@ -148,18 +260,89 @@ class ParticlesPanel extends PluginPanel
 	@Nullable
 	private EmitterProfile copiedStyle;
 
+	// Drag state lives on the panel, not on rows (rows are rebuilt each render)
+	@Nullable
+	private String dragKey;
+	@Nullable
+	private String dragCategory;
+	@Nullable
+	private Point pressScreen;
+	private boolean dragging;
+	private boolean pendingRender;
+	@Nullable
+	private JComponent dropTarget;
+	@Nullable
+	private Border dropTargetBorder;
+
+	/**
+	 * One shared recognizer attached to every drag handle; it reads the dragged
+	 * profile's identity off the handle's client properties at press time.
+	 */
+	private final MouseAdapter dragAdapter = new MouseAdapter()
+	{
+		@Override
+		public void mousePressed(MouseEvent e)
+		{
+			JComponent handle = (JComponent) e.getComponent();
+			dragKey = (String) handle.getClientProperty(DRAG_KEY);
+			dragCategory = (String) handle.getClientProperty(DRAG_CAT);
+			pressScreen = e.getLocationOnScreen();
+			dragging = false;
+		}
+
+		@Override
+		public void mouseDragged(MouseEvent e)
+		{
+			if (dragKey == null)
+			{
+				return;
+			}
+			if (!dragging)
+			{
+				Point now = e.getLocationOnScreen();
+				if (Math.hypot(now.x - pressScreen.x, now.y - pressScreen.y) < DRAG_THRESHOLD)
+				{
+					return;
+				}
+				dragging = true;
+			}
+			hoverDropTarget(e);
+		}
+
+		@Override
+		public void mouseReleased(MouseEvent e)
+		{
+			boolean wasDragging = dragging;
+			dragging = false;
+			if (wasDragging)
+			{
+				performDrop(e);
+			}
+			dragKey = null;
+			dragCategory = null;
+			clearHighlight();
+			if (pendingRender)
+			{
+				pendingRender = false;
+				render();
+			}
+		}
+	};
+
 	ParticlesPanel(boolean developerMode, Runnable openViewer, BiConsumer<String, Boolean> onToggleProfile,
-		BiConsumer<String, Boolean> onToggleWip, BiConsumer<Set<String>, Boolean> onToggleMany,
+		BiConsumer<String, Boolean> onToggleWip, BulkToggle onToggleMany,
 		BiConsumer<String, EmitterProfile> onPasteStyle, Consumer<String> onDeleteProfile,
-		Consumer<String> onRenameProfile, Consumer<String> onEditProfile)
+		Consumer<String> onRenameProfile, Consumer<String> onEditProfile, FolderActions folderActions)
 	{
 		this.developerMode = developerMode;
 		this.onToggleProfile = onToggleProfile;
 		this.onToggleWip = onToggleWip;
+		this.onToggleMany = onToggleMany;
 		this.onPasteStyle = onPasteStyle;
 		this.onDeleteProfile = onDeleteProfile;
 		this.onRenameProfile = onRenameProfile;
 		this.onEditProfile = onEditProfile;
+		this.folderActions = folderActions;
 
 		setLayout(new BorderLayout(0, 8));
 		setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
@@ -171,11 +354,11 @@ class ParticlesPanel extends PluginPanel
 
 		JButton enableAll = new JButton("Enable all");
 		enableAll.setToolTipText("Turn on every preset in the selected tab");
-		enableAll.addActionListener(e -> onToggleMany.accept(filteredKeys(), true));
+		enableAll.addActionListener(e -> onToggleMany.accept(looseKeysInTab(), folderIdsInTab(), true));
 
 		JButton disableAll = new JButton("Disable all");
 		disableAll.setToolTipText("Turn off every preset in the selected tab");
-		disableAll.addActionListener(e -> onToggleMany.accept(filteredKeys(), false));
+		disableAll.addActionListener(e -> onToggleMany.accept(looseKeysInTab(), folderIdsInTab(), false));
 
 		JPanel controls = new JPanel();
 		controls.setLayout(new BoxLayout(controls, BoxLayout.Y_AXIS));
@@ -283,16 +466,17 @@ class ParticlesPanel extends PluginPanel
 	}
 
 	/**
-	 * Keys of the profiles the currently-selected tab shows (ignoring the
-	 * search text), for the bulk enable and disable buttons.
+	 * Loose (ungrouped) profile keys the current tab shows, for the bulk
+	 * buttons. Foldered children are excluded - the folder is bulk-toggled.
 	 */
-	private Set<String> filteredKeys()
+	private Set<String> looseKeysInTab()
 	{
 		Set<String> keys = new HashSet<>();
 		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
 		{
 			EmitterProfile profile = entry.getValue();
-			if (category.matches(profile) && (developerMode || !Category.isWip(profile)))
+			if (profile.getFolderId() == null && category.matches(profile)
+				&& (developerMode || !Category.isWip(profile)))
 			{
 				keys.add(entry.getKey());
 			}
@@ -301,22 +485,50 @@ class ParticlesPanel extends PluginPanel
 	}
 
 	/**
-	 * Update the profile data and re-render. Must be called on the Swing EDT.
+	 * Folder ids the current tab shows, for the bulk buttons.
+	 */
+	private Set<String> folderIdsInTab()
+	{
+		Set<String> ids = new HashSet<>();
+		for (ProfileFolder folder : folders.values())
+		{
+			EmitterProfile rep = representativeOf(folder.getId());
+			if (rep != null && category.matches(rep)
+				&& (developerMode || !(folder.isWip() || Category.categoryWip(rep))))
+			{
+				ids.add(folder.getId());
+			}
+		}
+		return ids;
+	}
+
+	/**
+	 * Update the profile and folder data and re-render. Must be called on the
+	 * Swing EDT.
 	 *
 	 * @param presentSignatures signatures of pieces on the currently worn model
 	 */
-	void rebuild(Map<String, EmitterProfile> profiles, Set<String> presentSignatures)
+	void rebuild(Map<String, EmitterProfile> profiles, Map<String, ProfileFolder> folders,
+		Set<String> presentSignatures)
 	{
 		this.profiles = profiles;
+		this.folders = folders;
 		this.presentSignatures = presentSignatures;
 		render();
 	}
 
 	/**
 	 * Re-render the list through the current category tab and search text.
+	 * Suppressed while a drag is in flight so rows aren't rebuilt out from
+	 * under the gesture; the deferred render runs when the drag ends.
 	 */
 	private void render()
 	{
+		if (dragging)
+		{
+			pendingRender = true;
+			return;
+		}
 		profileList.removeAll();
 
 		if (!developerMode && category.wip)
@@ -331,17 +543,36 @@ class ParticlesPanel extends PluginPanel
 		}
 
 		String query = searchBar.getText() == null ? "" : searchBar.getText().trim().toLowerCase();
-		List<Map.Entry<String, EmitterProfile>> entries = new ArrayList<>(profiles.entrySet());
-		entries.removeIf(entry -> !category.matches(entry.getValue())
-			|| (!developerMode && Category.isWip(entry.getValue()))
-			|| !matchesSearch(entry.getValue(), query));
-		entries.sort(Comparator.comparing(entry ->
-			entry.getValue().getName() == null ? "" : entry.getValue().getName().toLowerCase()));
+		List<Item> items = new ArrayList<>();
 
-		if (!entries.isEmpty())
+		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
 		{
-			String count = entries.size() + (entries.size() == 1 ? " profile" : " profiles");
-			// Remind the developer the tab they are viewing ships hidden
+			EmitterProfile profile = entry.getValue();
+			if (profile.getFolderId() != null || !category.matches(profile)
+				|| (!developerMode && Category.isWip(profile)) || !matchesSearch(profile, query))
+			{
+				continue;
+			}
+			items.add(Item.profile(entry.getKey(), profile));
+		}
+
+		for (ProfileFolder folder : folders.values())
+		{
+			EmitterProfile rep = representativeOf(folder.getId());
+			if (rep == null || !category.matches(rep)
+				|| (!developerMode && (folder.isWip() || Category.categoryWip(rep)))
+				|| !folderMatchesSearch(folder, query))
+			{
+				continue;
+			}
+			items.add(Item.folder(folder));
+		}
+
+		items.sort(Comparator.comparing(item -> item.name == null ? "" : item.name.toLowerCase()));
+
+		if (!items.isEmpty())
+		{
+			String count = items.size() + (items.size() == 1 ? " item" : " items");
 			if (developerMode && category.wip)
 			{
 				count += " (WIP category)";
@@ -352,9 +583,11 @@ class ParticlesPanel extends PluginPanel
 			profileList.add(Box.createVerticalStrut(6));
 		}
 
-		for (Map.Entry<String, EmitterProfile> entry : entries)
+		for (Item item : items)
 		{
-			profileList.add(buildRow(entry.getKey(), entry.getValue()));
+			profileList.add(item.folder
+				? buildFolderRow(item.folderObj, query)
+				: buildRow(item.key, item.profile));
 		}
 
 		profileList.revalidate();
@@ -363,6 +596,7 @@ class ParticlesPanel extends PluginPanel
 
 	private JPanel buildRow(String profileKey, EmitterProfile profile)
 	{
+		boolean inFolder = profile.getFolderId() != null;
 		// Signature presence only means worn for player profiles; trivial
 		// fragment signatures collide across unrelated models
 		boolean worn = EmitterProfile.TARGET_PLAYER.equals(profile.getTargetType())
@@ -387,11 +621,24 @@ class ParticlesPanel extends PluginPanel
 		row.setAlignmentX(Component.LEFT_ALIGNMENT);
 		row.add(toggle, BorderLayout.CENTER);
 
+		// Drop metadata: dropping onto a loose profile groups the two; onto a
+		// child joins that child's folder
+		row.putClientProperty(DROP_KIND, inFolder ? "child" : "loose");
+		row.putClientProperty(DROP_KEY, profileKey);
+		row.putClientProperty(DROP_CAT, profile.getTargetType());
+		if (inFolder)
+		{
+			row.putClientProperty(DROP_FOLDER, profile.getFolderId());
+		}
+
 		if (developerMode)
 		{
-			// A ship/work-in-progress mark left of the enable toggle: a red
-			// check means shipped, unchecked marks it WIP so it stays saved but
-			// vanishes and is force-disabled for non-developer users
+			JPanel west = new JPanel();
+			west.setLayout(new BoxLayout(west, BoxLayout.X_AXIS));
+			west.add(dragHandle(profileKey, profile.getTargetType()));
+
+			// A ship/work-in-progress mark: a red check means shipped, unchecked
+			// marks it WIP so it stays saved but vanishes for shipped users
 			JCheckBox wipMark = new JCheckBox();
 			wipMark.setIcon(WIP_ICON);
 			wipMark.setSelectedIcon(PUBLISHED_ICON);
@@ -399,7 +646,8 @@ class ParticlesPanel extends PluginPanel
 			wipMark.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 6));
 			wipMark.setToolTipText("Ship this profile. Uncheck to mark it work-in-progress: it stays saved but is hidden and disabled for non-developer users.");
 			wipMark.addActionListener(e -> onToggleWip.accept(profileKey, !wipMark.isSelected()));
-			row.add(wipMark, BorderLayout.WEST);
+			west.add(wipMark);
+			row.add(west, BorderLayout.WEST);
 
 			JButton edit = new JButton("e");
 			edit.setMargin(new Insets(0, 4, 0, 4));
@@ -436,6 +684,12 @@ class ParticlesPanel extends PluginPanel
 			});
 			menu.add(copyStyle);
 			menu.add(pasteStyle);
+			if (inFolder)
+			{
+				JMenuItem removeFromFolder = new JMenuItem("Remove from folder");
+				removeFromFolder.addActionListener(e -> folderActions.removeMember.accept(profileKey));
+				menu.add(removeFromFolder);
+			}
 			menu.addPopupMenuListener(new PopupMenuListener()
 			{
 				@Override
@@ -458,7 +712,307 @@ class ParticlesPanel extends PluginPanel
 			toggle.setComponentPopupMenu(menu);
 		}
 
+		if (inFolder)
+		{
+			row.setBorder(BorderFactory.createEmptyBorder(0, 16, 0, 0));
+		}
 		return row;
+	}
+
+	/**
+	 * A folder row: for shipped users a single enable toggle indistinguishable
+	 * from a profile row; for developers a header (WIP mark, enable toggle,
+	 * expand, rename, delete, Dissolve) that expands to reveal member rows.
+	 */
+	private JPanel buildFolderRow(ProfileFolder folder, String query)
+	{
+		String folderId = folder.getId();
+		if (!developerMode)
+		{
+			JCheckBox toggle = new JCheckBox(folder.getName(), folder.isEnabled());
+			toggle.setToolTipText(folder.getName());
+			toggle.addActionListener(e -> folderActions.toggleEnabled.accept(folderId, toggle.isSelected()));
+			JPanel row = new JPanel(new BorderLayout());
+			row.setAlignmentX(Component.LEFT_ALIGNMENT);
+			row.add(toggle, BorderLayout.CENTER);
+			return row;
+		}
+
+		EmitterProfile rep = representativeOf(folderId);
+		String cat = rep == null ? "" : rep.getTargetType();
+
+		List<Map.Entry<String, EmitterProfile>> children = childrenOf(folderId);
+		boolean searching = !query.isEmpty();
+		boolean anyChildMatch = false;
+		for (Map.Entry<String, EmitterProfile> child : children)
+		{
+			if (matchesSearch(child.getValue(), query))
+			{
+				anyChildMatch = true;
+				break;
+			}
+		}
+		boolean showChildren = searching ? anyChildMatch : expanded.contains(folderId);
+
+		JPanel header = new JPanel(new BorderLayout());
+		header.setAlignmentX(Component.LEFT_ALIGNMENT);
+		header.putClientProperty(DROP_KIND, "folder");
+		header.putClientProperty(DROP_KEY, folderId);
+		header.putClientProperty(DROP_CAT, cat);
+		header.putClientProperty(DROP_FOLDER, folderId);
+
+		JPanel west = new JPanel();
+		west.setLayout(new BoxLayout(west, BoxLayout.X_AXIS));
+		JCheckBox enable = new JCheckBox();
+		enable.setSelected(folder.isEnabled());
+		enable.setToolTipText("Folder enabled - gates every member");
+		enable.addActionListener(e -> folderActions.toggleEnabled.accept(folderId, enable.isSelected()));
+		west.add(enable);
+		JCheckBox wipMark = new JCheckBox();
+		wipMark.setIcon(WIP_ICON);
+		wipMark.setSelectedIcon(PUBLISHED_ICON);
+		wipMark.setSelected(!folder.isWip());
+		wipMark.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 6));
+		wipMark.setToolTipText("Ship this folder. Uncheck to mark the whole group work-in-progress.");
+		wipMark.addActionListener(e -> folderActions.toggleWip.accept(folderId, !wipMark.isSelected()));
+		west.add(wipMark);
+		header.add(west, BorderLayout.WEST);
+
+		JLabel name = new JLabel((showChildren ? "▼ " : "▶ ") + folder.getName()
+			+ "  (" + children.size() + ")");
+		name.setToolTipText("Click to " + (showChildren ? "collapse" : "expand") + " this folder");
+		name.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+		name.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent e)
+			{
+				if (expanded.contains(folderId))
+				{
+					expanded.remove(folderId);
+				}
+				else
+				{
+					expanded.add(folderId);
+				}
+				render();
+			}
+		});
+		header.add(name, BorderLayout.CENTER);
+
+		JButton rename = new JButton("~");
+		rename.setMargin(new Insets(0, 4, 0, 4));
+		rename.setToolTipText("Rename this folder");
+		rename.addActionListener(e -> folderActions.rename.accept(folderId));
+		JButton delete = new JButton("x");
+		delete.setMargin(new Insets(0, 4, 0, 4));
+		delete.setToolTipText("Dissolve this folder (members return to loose rows)");
+		delete.addActionListener(e -> folderActions.dissolve.accept(folderId));
+		JPanel buttons = new JPanel();
+		buttons.setLayout(new BoxLayout(buttons, BoxLayout.X_AXIS));
+		buttons.add(rename);
+		buttons.add(delete);
+		header.add(buttons, BorderLayout.EAST);
+
+		JPopupMenu menu = new JPopupMenu();
+		JMenuItem dissolve = new JMenuItem("Dissolve folder");
+		dissolve.addActionListener(e -> folderActions.dissolve.accept(folderId));
+		menu.add(dissolve);
+		header.setComponentPopupMenu(menu);
+		name.setComponentPopupMenu(menu);
+
+		JPanel container = new JPanel();
+		container.setLayout(new BoxLayout(container, BoxLayout.Y_AXIS));
+		container.setAlignmentX(Component.LEFT_ALIGNMENT);
+		container.add(header);
+		if (showChildren)
+		{
+			children.sort(Comparator.comparing(entry ->
+				entry.getValue().getName() == null ? "" : entry.getValue().getName().toLowerCase()));
+			for (Map.Entry<String, EmitterProfile> child : children)
+			{
+				if (searching && !matchesSearch(child.getValue(), query))
+				{
+					continue;
+				}
+				container.add(buildRow(child.getKey(), child.getValue()));
+			}
+		}
+		return container;
+	}
+
+	// --- Folder helpers ------------------------------------------------------
+
+	private List<Map.Entry<String, EmitterProfile>> childrenOf(String folderId)
+	{
+		List<Map.Entry<String, EmitterProfile>> children = new ArrayList<>();
+		for (Map.Entry<String, EmitterProfile> entry : profiles.entrySet())
+		{
+			if (folderId.equals(entry.getValue().getFolderId()))
+			{
+				children.add(entry);
+			}
+		}
+		return children;
+	}
+
+	@Nullable
+	private EmitterProfile representativeOf(String folderId)
+	{
+		for (EmitterProfile profile : profiles.values())
+		{
+			if (folderId.equals(profile.getFolderId()))
+			{
+				return profile;
+			}
+		}
+		return null;
+	}
+
+	private boolean folderMatchesSearch(ProfileFolder folder, String query)
+	{
+		if (query.isEmpty())
+		{
+			return true;
+		}
+		if (folder.getName() != null && folder.getName().toLowerCase().contains(query))
+		{
+			return true;
+		}
+		for (Map.Entry<String, EmitterProfile> child : childrenOf(folder.getId()))
+		{
+			if (matchesSearch(child.getValue(), query))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// --- Drag and drop -------------------------------------------------------
+
+	private JLabel dragHandle(String key, String targetType)
+	{
+		JLabel handle = new JLabel("≡");
+		handle.setToolTipText("Drag onto another profile or a folder to group them");
+		handle.setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+		handle.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 6));
+		handle.putClientProperty(DRAG_KEY, key);
+		handle.putClientProperty(DRAG_CAT, targetType);
+		handle.addMouseListener(dragAdapter);
+		handle.addMouseMotionListener(dragAdapter);
+		return handle;
+	}
+
+	@Nullable
+	private JComponent dropTargetAt(MouseEvent e)
+	{
+		Point p = SwingUtilities.convertPoint(e.getComponent(), e.getPoint(), profileList);
+		Component c = SwingUtilities.getDeepestComponentAt(profileList, p.x, p.y);
+		while (c != null && !(c instanceof JComponent && ((JComponent) c).getClientProperty(DROP_KIND) != null))
+		{
+			c = c.getParent();
+		}
+		return (JComponent) c;
+	}
+
+	private void hoverDropTarget(MouseEvent e)
+	{
+		JComponent target = dropTargetAt(e);
+		highlight(target, target != null && isValidDrop(target));
+	}
+
+	private boolean isValidDrop(JComponent target)
+	{
+		if (dragKey == null || !dragCategory.equals(target.getClientProperty(DROP_CAT)))
+		{
+			return false;
+		}
+		// Dropping a profile onto itself, or onto its own folder, is a no-op
+		if ("loose".equals(target.getClientProperty(DROP_KIND)))
+		{
+			return !dragKey.equals(target.getClientProperty(DROP_KEY));
+		}
+		return true;
+	}
+
+	private void performDrop(MouseEvent e)
+	{
+		JComponent target = dropTargetAt(e);
+		if (target == null || !isValidDrop(target))
+		{
+			return;
+		}
+		String kind = (String) target.getClientProperty(DROP_KIND);
+		if ("loose".equals(kind))
+		{
+			folderActions.create.accept((String) target.getClientProperty(DROP_KEY), dragKey);
+		}
+		else if ("folder".equals(kind))
+		{
+			folderActions.addMember.accept((String) target.getClientProperty(DROP_KEY), dragKey);
+		}
+		else if ("child".equals(kind))
+		{
+			folderActions.addMember.accept((String) target.getClientProperty(DROP_FOLDER), dragKey);
+		}
+	}
+
+	private void highlight(@Nullable JComponent target, boolean valid)
+	{
+		if (target == dropTarget)
+		{
+			return;
+		}
+		clearHighlight();
+		if (target != null)
+		{
+			dropTarget = target;
+			dropTargetBorder = target.getBorder();
+			target.setBorder(BorderFactory.createLineBorder(
+				valid ? new Color(80, 180, 80) : new Color(180, 80, 80), 2));
+		}
+	}
+
+	private void clearHighlight()
+	{
+		if (dropTarget != null)
+		{
+			dropTarget.setBorder(dropTargetBorder);
+			dropTarget = null;
+			dropTargetBorder = null;
+		}
+	}
+
+	/**
+	 * One rendered row: a loose/child profile or a folder, sorted together.
+	 */
+	private static final class Item
+	{
+		final String name;
+		final String key;
+		final boolean folder;
+		final EmitterProfile profile;
+		final ProfileFolder folderObj;
+
+		private Item(String name, String key, boolean folder, EmitterProfile profile, ProfileFolder folderObj)
+		{
+			this.name = name;
+			this.key = key;
+			this.folder = folder;
+			this.profile = profile;
+			this.folderObj = folderObj;
+		}
+
+		static Item profile(String key, EmitterProfile profile)
+		{
+			return new Item(profile.getName(), key, false, profile, null);
+		}
+
+		static Item folder(ProfileFolder folder)
+		{
+			return new Item(folder.getName(), folder.getId(), true, null, folder);
+		}
 	}
 
 	/**

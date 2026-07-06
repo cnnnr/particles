@@ -5,6 +5,7 @@ import com.google.gson.reflect.TypeToken;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 import org.junit.Test;
 import static org.junit.Assert.assertFalse;
@@ -66,5 +67,49 @@ public class PresetsTest
 				assertTrue("movementLifetime out of range in " + key, move >= 10 && move <= 100);
 			});
 		}
+	}
+
+	/**
+	 * The bundled folders must parse and stay consistent with the presets: every
+	 * membership resolves to a shipped folder and every folder ships at least
+	 * two members - a guard against a broken folder re-export.
+	 */
+	@Test
+	public void bundledFoldersParseAndAreConsistent() throws Exception
+	{
+		Map<String, ProfileFolder> folders;
+		try (InputStream in = EmitterStore.class.getResourceAsStream("/folders.json"))
+		{
+			assertNotNull("folders.json missing from resources", in);
+			folders = new Gson().fromJson(new InputStreamReader(in, StandardCharsets.UTF_8),
+				new TypeToken<Map<String, ProfileFolder>>()
+				{
+				}.getType());
+		}
+		assertNotNull("folders.json is not a JSON object", folders);
+
+		Map<String, EmitterProfile> profiles;
+		try (InputStream in = EmitterStore.class.getResourceAsStream("/presets.json"))
+		{
+			profiles = new Gson().fromJson(new InputStreamReader(in, StandardCharsets.UTF_8),
+				new TypeToken<Map<String, EmitterProfile>>()
+				{
+				}.getType());
+		}
+
+		Map<String, Integer> counts = new HashMap<>();
+		profiles.forEach((key, profile) ->
+		{
+			String folderId = profile.getFolderId();
+			if (folderId != null)
+			{
+				assertTrue("profile " + key + " points at missing folder " + folderId,
+					folders.containsKey(folderId));
+				counts.merge(folderId, 1, Integer::sum);
+			}
+		});
+		folders.forEach((id, folder) ->
+			assertTrue("folder " + id + " ships fewer than two members",
+				counts.getOrDefault(id, 0) >= 2));
 	}
 }
