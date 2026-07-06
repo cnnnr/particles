@@ -766,13 +766,10 @@ class ParticlesPanel extends PluginPanel
 		header.putClientProperty(DROP_CAT, cat);
 		header.putClientProperty(DROP_FOLDER, folderId);
 
+		// WIP mark then enable toggle, matching the order on profile rows so the
+		// red marks and preference checks line up into uniform columns
 		JPanel west = new JPanel();
 		west.setLayout(new BoxLayout(west, BoxLayout.X_AXIS));
-		JCheckBox enable = new JCheckBox();
-		enable.setSelected(folder.isEnabled());
-		enable.setToolTipText("Folder enabled - gates every member");
-		enable.addActionListener(e -> folderActions.toggleEnabled.accept(folderId, enable.isSelected()));
-		west.add(enable);
 		JCheckBox wipMark = new JCheckBox();
 		wipMark.setIcon(WIP_ICON);
 		wipMark.setSelectedIcon(PUBLISHED_ICON);
@@ -781,6 +778,12 @@ class ParticlesPanel extends PluginPanel
 		wipMark.setToolTipText("Ship this folder. Uncheck to mark the whole group work-in-progress.");
 		wipMark.addActionListener(e -> folderActions.toggleWip.accept(folderId, !wipMark.isSelected()));
 		west.add(wipMark);
+		JCheckBox enable = new JCheckBox();
+		enable.setSelected(folder.isEnabled());
+		enable.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 6));
+		enable.setToolTipText("Folder enabled - gates every member");
+		enable.addActionListener(e -> folderActions.toggleEnabled.accept(folderId, enable.isSelected()));
+		west.add(enable);
 		header.add(west, BorderLayout.WEST);
 
 		JLabel name = new JLabel((showChildren ? "▼ " : "▶ ") + folder.getName()
