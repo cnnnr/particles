@@ -2627,6 +2627,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			emitter.carry += rate * dt;
 			int count = (int) emitter.carry;
 			emitter.carry -= count;
+			if (needsCentroid(style))
+			{
+				setCentroid(emitter, oe.anchorXs, oe.anchorYs, oe.anchorZs);
+			}
 			boolean feathered = style.getFeatherStrength() > 0 && emitter.chains != null
 				&& emitter.featherReady;
 			for (int i = 0; i < count; i++)
@@ -2637,12 +2641,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 				}
 				if (feathered)
 				{
-					spawnFeatheredStatic(oe.anchorXs, oe.anchorYs, oe.anchorZs, emitter);
+					spawnFeatheredStatic(oe.anchorXs, oe.anchorYs, oe.anchorZs, emitter, true);
 				}
 				else
 				{
 					int a = emitter.anchorStart + random.nextInt(emitter.anchorCount);
-					spawnAt(style, oe.anchorXs[a], oe.anchorYs[a], oe.anchorZs[a], 1f);
+					spawnAt(style, oe.anchorXs[a], oe.anchorYs[a], oe.anchorZs[a],
+						emitter.cx, emitter.cy, emitter.cz, 1f);
 				}
 			}
 		}
@@ -2652,7 +2657,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 * Feathered spawn over static anchors: the smoothed-chain curve without
 	 * the movement lerp that the player variant threads through prev arrays.
 	 */
-	private void spawnFeatheredStatic(float[] xs, float[] ys, float[] zs, ActiveEmitter emitter)
+	private void spawnFeatheredStatic(float[] xs, float[] ys, float[] zs, ActiveEmitter emitter,
+		boolean useCentroid)
 	{
 		int k = random.nextInt(emitter.sampleChainOf.length);
 		int[] chain = emitter.chains[emitter.sampleChainOf[k]];
@@ -2672,7 +2678,16 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			smoothed(zs, emitter, chain, j, w),
 			smoothed(zs, emitter, chain, jC, w), t);
 
-		spawnAt(emitter.style, x, y, z, 1f);
+		// The graphic path has no persistent centroid, so it opts out and both
+		// centroid effects stay a no-op there.
+		if (useCentroid)
+		{
+			spawnAt(emitter.style, x, y, z, emitter.cx, emitter.cy, emitter.cz, 1f);
+		}
+		else
+		{
+			spawnAt(emitter.style, x, y, z, 1f);
+		}
 	}
 
 	@Nullable
@@ -3026,7 +3041,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 					fillGraphicAnchors(emitter, model, ox, oy, oz, sin, cos, null);
 					filled = emitter;
 				}
-				spawnFeatheredStatic(gfxAnchorXs, gfxAnchorYs, gfxAnchorZs, emitter);
+				spawnFeatheredStatic(gfxAnchorXs, gfxAnchorYs, gfxAnchorZs, emitter, false);
 			}
 			else if (interpolated && emitter.chains != null)
 			{

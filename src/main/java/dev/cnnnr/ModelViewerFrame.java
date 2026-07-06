@@ -213,7 +213,7 @@ class ModelViewerFrame extends JFrame
 	private final JSpinner sizeJitterSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 32, 1));
 	private final JSpinner rateSpinner = new JSpinner(new SpinnerNumberModel(80, 0, 1000, 4));
 	private final JSpinner trailSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 200, 4));
-	private final JSpinner lifetimeSpinner = new JSpinner(new SpinnerNumberModel(2400, 100, 10000, 100));
+	private final JSpinner lifetimeSpinner = new JSpinner(new SpinnerNumberModel(600, 100, 10000, 100));
 	private final JSpinner moveLifetimeSpinner = new JSpinner(new SpinnerNumberModel(100, 10, 100, 4));
 	private final JSpinner riseSpinner = new JSpinner(new SpinnerNumberModel(26, -256, 256, 2));
 	private final JSpinner spreadSpinner = new JSpinner(new SpinnerNumberModel(12, 0, 256, 2));
@@ -223,16 +223,16 @@ class ModelViewerFrame extends JFrame
 	private final JSpinner windZSpinner = new JSpinner(new SpinnerNumberModel(0, -128, 128, 2));
 	private final JSpinner dragSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 300, 10));
 	private final JSpinner vortexSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 4));
-	private final JSpinner emitScaleSpinner = new JSpinner(new SpinnerNumberModel(100, 10, 400, 5));
+	private final JSpinner emitScaleSpinner = new JSpinner(new SpinnerNumberModel(100, 10, 400, 4));
 	private final JSpinner stretchSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 300, 10));
 	private final JSpinner stretchRampSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 100, 10));
 	private final JSpinner jitterSpinner = new JSpinner(new SpinnerNumberModel(10, 0, 64, 1));
 	private final JSpinner featherSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 8, 1));
 	private final JSpinner interpolationSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 4, 1));
-	private final JSpinner depthBiasSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 64, 2));
-	private final JSpinner offsetXSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
-	private final JSpinner offsetYSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
-	private final JSpinner offsetZSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 2));
+	private final JSpinner depthBiasSpinner = new JSpinner(new SpinnerNumberModel(0, 0, 64, 1));
+	private final JSpinner offsetXSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 1));
+	private final JSpinner offsetYSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 1));
+	private final JSpinner offsetZSpinner = new JSpinner(new SpinnerNumberModel(0, -256, 256, 1));
 	private final JTextField itemFilterField = new JTextField();
 	private final JTextField animFilterField = new JTextField();
 	private final JTextField animFramesField = new JTextField();
@@ -925,6 +925,11 @@ class ModelViewerFrame extends JFrame
 		animFramesField.setEnabled(actorTarget || graphic);
 		moveLifetimeSpinner.setEnabled(actorTarget);
 		trailSpinner.setEnabled(!object && !graphic);
+		// Vortex and emit scale measure from the emitter's vertex centroid, so
+		// they need a vertex ring: projectiles are a single point, and the
+		// graphic emit path has no persistent centroid
+		vortexSpinner.setEnabled(!projectile && !graphic);
+		emitScaleSpinner.setEnabled(!projectile && !graphic);
 		itemFilterField.setEnabled(!object && !npc && !graphic);
 		wornItemsCombo.setEnabled(!object && !npc && !graphic);
 		addWornItemButton.setEnabled(!object && !npc && !graphic);
