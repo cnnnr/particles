@@ -537,8 +537,8 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 
 		overlayManager.add(overlay);
 
-		panel = new ParticlesPanel(developerMode, this::openViewer, store::setEnabled, store::setEnabledAll,
-			store::pasteStyle, store::delete, this::renameProfile, this::editProfile);
+		panel = new ParticlesPanel(developerMode, this::openViewer, store::setEnabled, store::setWip,
+			store::setEnabledAll, store::pasteStyle, store::delete, this::renameProfile, this::editProfile);
 		navButton = NavigationButton.builder()
 			.tooltip("Particles")
 			.icon(createIcon())

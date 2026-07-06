@@ -1,15 +1,19 @@
 package dev.cnnnr;
 
+import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
+import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -22,6 +26,7 @@ import javax.annotation.Nullable;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.Icon;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -95,11 +100,16 @@ class ParticlesPanel extends PluginPanel
 		}
 
 		/**
-		 * True when the profile falls into any WIP category and should be
-		 * hidden and force-disabled outside developer mode.
+		 * True when the profile is individually marked work-in-progress or
+		 * falls into any WIP category, so it is hidden and force-disabled
+		 * outside developer mode.
 		 */
 		static boolean isWip(EmitterProfile profile)
 		{
+			if (profile.isWip())
+			{
+				return true;
+			}
 			for (Category value : values())
 			{
 				if (value.wip && value.matches(profile))
@@ -111,8 +121,16 @@ class ParticlesPanel extends PluginPanel
 		}
 	}
 
+	/**
+	 * Dev-only ship/WIP mark icons: a red check for shipped, an empty box for
+	 * work-in-progress. Drawn so the check is red regardless of the theme.
+	 */
+	private static final Icon PUBLISHED_ICON = markIcon(true);
+	private static final Icon WIP_ICON = markIcon(false);
+
 	private final boolean developerMode;
 	private final BiConsumer<String, Boolean> onToggleProfile;
+	private final BiConsumer<String, Boolean> onToggleWip;
 	private final BiConsumer<String, EmitterProfile> onPasteStyle;
 	private final Consumer<String> onDeleteProfile;
 	private final Consumer<String> onRenameProfile;
@@ -131,11 +149,13 @@ class ParticlesPanel extends PluginPanel
 	private EmitterProfile copiedStyle;
 
 	ParticlesPanel(boolean developerMode, Runnable openViewer, BiConsumer<String, Boolean> onToggleProfile,
-		BiConsumer<Set<String>, Boolean> onToggleMany, BiConsumer<String, EmitterProfile> onPasteStyle,
-		Consumer<String> onDeleteProfile, Consumer<String> onRenameProfile, Consumer<String> onEditProfile)
+		BiConsumer<String, Boolean> onToggleWip, BiConsumer<Set<String>, Boolean> onToggleMany,
+		BiConsumer<String, EmitterProfile> onPasteStyle, Consumer<String> onDeleteProfile,
+		Consumer<String> onRenameProfile, Consumer<String> onEditProfile)
 	{
 		this.developerMode = developerMode;
 		this.onToggleProfile = onToggleProfile;
+		this.onToggleWip = onToggleWip;
 		this.onPasteStyle = onPasteStyle;
 		this.onDeleteProfile = onDeleteProfile;
 		this.onRenameProfile = onRenameProfile;
@@ -363,6 +383,18 @@ class ParticlesPanel extends PluginPanel
 
 		if (developerMode)
 		{
+			// A ship/work-in-progress mark left of the enable toggle: a red
+			// check means shipped, unchecked marks it WIP so it stays saved but
+			// vanishes and is force-disabled for non-developer users
+			JCheckBox wipMark = new JCheckBox();
+			wipMark.setIcon(WIP_ICON);
+			wipMark.setSelectedIcon(PUBLISHED_ICON);
+			wipMark.setSelected(!profile.isWip());
+			wipMark.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 6));
+			wipMark.setToolTipText("Ship this profile. Uncheck to mark it work-in-progress: it stays saved but is hidden and disabled for non-developer users.");
+			wipMark.addActionListener(e -> onToggleWip.accept(profileKey, !wipMark.isSelected()));
+			row.add(wipMark, BorderLayout.WEST);
+
 			JButton edit = new JButton("e");
 			edit.setMargin(new Insets(0, 4, 0, 4));
 			edit.setToolTipText("Edit this profile in the vertex picker");
@@ -421,6 +453,28 @@ class ParticlesPanel extends PluginPanel
 		}
 
 		return row;
+	}
+
+	/**
+	 * A 14px checkbox glyph: a grey box, plus a red check when published.
+	 */
+	private static Icon markIcon(boolean published)
+	{
+		int s = 14;
+		BufferedImage img = new BufferedImage(s, s, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D g = img.createGraphics();
+		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		g.setColor(new Color(110, 110, 110));
+		g.drawRect(1, 1, s - 3, s - 3);
+		if (published)
+		{
+			g.setColor(new Color(220, 45, 45));
+			g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+			g.drawLine(3, 7, 6, 10);
+			g.drawLine(6, 10, 11, 3);
+		}
+		g.dispose();
+		return new ImageIcon(img);
 	}
 
 	private static boolean matchesSearch(EmitterProfile profile, String query)

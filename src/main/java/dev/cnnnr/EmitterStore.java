@@ -543,6 +543,21 @@ class EmitterStore
 	}
 
 	/**
+	 * Mark a profile work-in-progress (or ship-ready), a developer-only flag
+	 * that hides and force-disables it for shipped users. Persisted so it ships
+	 * to presets.json.
+	 */
+	synchronized void setWip(String profileKey, boolean wip)
+	{
+		EmitterProfile profile = profiles.get(profileKey);
+		if (profile != null && profile.isWip() != wip)
+		{
+			profile.setWip(wip);
+			save();
+		}
+	}
+
+	/**
 	 * Flip a set of profiles at once with a single config write.
 	 */
 	synchronized void setEnabledAll(Collection<String> profileKeys, boolean enabled)

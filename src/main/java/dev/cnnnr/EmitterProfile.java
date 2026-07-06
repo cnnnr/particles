@@ -53,6 +53,13 @@ class EmitterProfile
 	 */
 	private String signature;
 	private boolean enabled = true;
+	/**
+	 * Author's work-in-progress mark: the profile stays saved but is hidden and
+	 * force-disabled for shipped (non-developer) users, like a WIP category but
+	 * per profile. Defaults false (shippable), so existing profiles and presets
+	 * ship normally without a migration.
+	 */
+	private boolean wip = false;
 	private Set<Integer> vertices = new HashSet<>();
 	/**
 	 * Item IDs gating this profile: only active while one of these items is
@@ -248,6 +255,7 @@ class EmitterProfile
 		c.graphicId = graphicId;
 		c.signature = signature;
 		c.enabled = enabled;
+		c.wip = wip;
 		c.vertices = new HashSet<>(vertices);
 		c.copyStyleFrom(this);
 		return c;
