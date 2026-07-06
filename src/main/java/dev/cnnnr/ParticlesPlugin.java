@@ -277,6 +277,13 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	 */
 	private final Set<Long> npcClaimedTiles = new HashSet<>();
 	/**
+	 * The drawn NPC per stacked tile: among size-1 NPCs at a tile center, the
+	 * engine draws the lowest scene-index one (field-validated with the NPC
+	 * stack oracle). Undrawn stack members are gated out of emission so their
+	 * particles don't double up on the drawn npc. Reused per tick.
+	 */
+	private final Map<Long, NPC> npcTileOwners = new HashMap<>();
+	/**
 	 * This tick's higher-precedence claims: the local player's tile beats
 	 * everyone on it, and their player combat target's tile beats NPC claims
 	 * and index order.
@@ -923,6 +930,7 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 		playerStamp++;
 		tileOwners.clear();
 		npcClaimedTiles.clear();
+		npcTileOwners.clear();
 
 		for (NPC npc : client.getTopLevelWorldView().npcs())
 		{
@@ -940,7 +948,14 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			{
 				continue;
 			}
-			npcClaimedTiles.add(((long) (lp.getX() >> 7) << 32) | ((lp.getY() >> 7) & 0xffffffffL));
+			long key = ((long) (lp.getX() >> 7) << 32) | ((lp.getY() >> 7) & 0xffffffffL);
+			npcClaimedTiles.add(key);
+			// Field-validated draw winner among stacked NPCs: lowest scene index
+			NPC owner = npcTileOwners.get(key);
+			if (owner == null || npc.getIndex() < owner.getIndex())
+			{
+				npcTileOwners.put(key, npc);
+			}
 		}
 		for (Player player : client.getTopLevelWorldView().players())
 		{
@@ -1961,6 +1976,20 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	{
 		LocalPoint lp = actor.getLocalLocation();
 		return ((long) (lp.getX() >> 7) << 32) | ((lp.getY() >> 7) & 0xffffffffL);
+	}
+
+	/**
+	 * A size-1 NPC standing exactly at its tile center: the only NPCs the
+	 * engine dedups when stacked, and thus the only ones the draw gate covers.
+	 */
+	private static boolean isCenteredSize1(NPC npc)
+	{
+		if (!isCentered(npc))
+		{
+			return false;
+		}
+		NPCComposition composition = npc.getTransformedComposition();
+		return composition != null && composition.getSize() == 1;
 	}
 
 	private static Set<Integer> wornItemIds(PlayerComposition composition)
@@ -3328,8 +3357,9 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 	/**
 	 * NPCs run the player pipeline - posed model anchors, orientation,
 	 * trails, feathering, animation gates - minus the equipment resolution
-	 * (the NPC ID is the whole identity) and minus the stack gate (stacked
-	 * NPCs are rare enough that all tracked ones emit).
+	 * (the NPC ID is the whole identity). Like players they honour the
+	 * stacked-actor draw: among size-1 NPCs sharing a tile center the engine
+	 * draws only the lowest scene index, so the rest are gated out of emission.
 	 */
 	private void processNpcs(float dt, int level, int radiusUnits, LocalPoint localLp)
 	{
@@ -3344,8 +3374,10 @@ public class ParticlesPlugin extends Plugin implements ModelViewerFrame.Callback
 			NPC npc = entry.getKey();
 			PlayerEmitters pe = entry.getValue();
 			if (npc.getWorldLocation().getPlane() != level
-				|| npc.getLocalLocation().distanceTo(localLp) > radiusUnits)
+				|| npc.getLocalLocation().distanceTo(localLp) > radiusUnits
+				|| (isCenteredSize1(npc) && npcTileOwners.get(tileKey(npc)) != npc))
 			{
+				// Out of scope, or a stacked npc the engine does not draw
 				pe.anchorCount = 0;
 				pe.prevCount = 0;
 				for (ActiveEmitter emitter : pe.emitters)
